@@ -1,0 +1,27 @@
+{
+  "name": "dataverse-linter",
+  "version": "0.1.0",
+  "description": "Standalone Node.js static analyzer for PowerShell scripts targeting the Dataverse Web API and pac solution CLI.",
+  "main": "src/index.js",
+  "bin": {
+    "dataverse-linter": "src/index.js"
+  },
+  "scripts": {
+    "test": "node tests/run-battery.js",
+    "lint": "node src/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/djwmobley/dataverse-linter.git"
+  },
+  "keywords": ["dataverse", "powerplatform", "power-platform", "powershell", "lint", "static-analysis", "web-api", "alm"],
+  "author": "Dan Mobley (djwmobley)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/djwmobley/dataverse-linter/issues"
+  },
+  "homepage": "https://github.com/djwmobley/dataverse-linter#readme",
+  "engines": {
+    "node": ">=18"
+  }
+}

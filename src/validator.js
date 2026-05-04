@@ -1,0 +1,160 @@
+const fs = require("fs");
+const path = require("path");
+
+function validate(extraction) {
+    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, filePath } = extraction;
+    const errors = [...(parseErrors || [])];
+
+    const overridesPath = path.join(__dirname, "../rules/overrides.json");
+    let overrides = {};
+    if (fs.existsSync(overridesPath)) { overrides = JSON.parse(fs.readFileSync(overridesPath, "utf8")); }
+
+    const registryPath = path.join(__dirname, "../rules/registry.json");
+    let registry = [];
+    if (fs.existsSync(registryPath)) { registry = JSON.parse(fs.readFileSync(registryPath, "utf8")); }
+
+    let schema = null;
+    const schemaPath = path.join(__dirname, "../rules/schema.json");
+    if (fs.existsSync(schemaPath)) { schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")); }
+
+    // systemEntities: hardcoded curated list of built-in Dataverse entities for which
+    // Cascade=Cascade on relationships is high-risk. NOT driven by schema.json — schema
+    // linkage is a separate rule (schema-entity-not-found). Keep this list in sync with
+    // commonly-used built-in CE entities.
+    const systemEntities = [
+        "systemuser", "businessunit", "team", "organization", "transactioncurrency",
+        "position", "queue", "account", "contact", "lead", "opportunity", "role",
+        "email", "task", "appointment", "phonecall", "incident"
+    ];
+
+    // Normalize PowerShell line continuations (backtick followed by newline) for easier regex matching.
+    const normalizedContent = strippedContent.replace(/`\s*\r?\n/g, ' ');
+
+    // Evaluate dynamic rules from registry
+    registry.forEach(rule => {
+        if (!rule.enabled) return;
+
+        // regex-inverse rules must use the comment- and string-stripped derivation so
+        // that bypass text hidden in comments or string literals cannot satisfy them.
+        // regex rules (R24, R21) use normalized content; all other regex rules use strippedContent.
+        let targetContent;
+        if (rule.type === "regex-inverse") {
+            targetContent = noCommentNoStringContent;
+        } else if (rule.id === "R24" || rule.id === "R21") {
+            targetContent = normalizedContent;
+        } else {
+            targetContent = strippedContent;
+        }
+
+        if (rule.type === "regex" && rule.pattern) {
+            const regex = new RegExp(rule.pattern, "gm");
+            let match;
+            while ((match = regex.exec(targetContent)) !== null) {
+                // Find line number roughly in the original strippedContent
+                const lines = strippedContent.substring(0, match.index).split('\n');
+                errors.push({
+                    rule: rule.id,
+                    message: rule.message,
+                    details: "Matched pattern near line " + lines.length
+                });
+            }
+        }
+
+        if (rule.type === "regex-template" && rule.pattern) {
+            if (!rule.variables || rule.variables.length === 0) {
+                process.stderr.write(`[validator] regex-template rule ${rule.id} has no variables; skipping\n`);
+            } else {
+                // Use split/join to avoid $1-style substitution issues from String.replace
+                const resolvedPattern = rule.pattern.split('${variables}').join(rule.variables.join('|'));
+                const regex = new RegExp(resolvedPattern, "gm");
+                let match;
+                while ((match = regex.exec(targetContent)) !== null) {
+                    const lines = strippedContent.substring(0, match.index).split('\n');
+                    errors.push({
+                        rule: rule.id,
+                        message: rule.message,
+                        details: "Matched pattern near line " + lines.length
+                    });
+                }
+            }
+        }
+
+        if (rule.type === "regex-inverse" && rule.pattern) {
+            const regex = new RegExp(rule.pattern, "gm");
+            if (!regex.test(targetContent)) {
+                errors.push({
+                    rule: rule.id,
+                    message: rule.message,
+                    details: "File missing required pattern: " + rule.pattern
+                });
+            }
+        }
+    });
+
+    payloads.forEach((payload, index) => {
+        function traverse(obj) {
+            if (typeof obj === "object" && obj !== null) {
+                for (const key in obj) {
+                    if (Object.hasOwnProperty.call(obj, key)) {
+                        const value = obj[key];
+                        if (key.endsWith("@odata.bind") && typeof value === "string") {
+                            if (value.match(/\w+='[^']+'/)) {
+                                errors.push({
+                                    rule: "odata-bind-guid",
+                                    message: overrides["odata-bind-guid"] ? overrides["odata-bind-guid"].message : "Invalid bind",
+                                    details: `Found invalid bind in payload ${index}: ${key} = ${value}`
+                                });
+                            }
+                            const optionSetMatch = value.match(/\/GlobalOptionSetDefinitions\(Name='([^']+)'\)/);
+                            if (optionSetMatch) {
+                                const optionSetName = optionSetMatch[1];
+                                if (!optionSets.includes(optionSetName)) {
+                                    errors.push({
+                                        rule: "optionset-coverage",
+                                        message: overrides["optionset-coverage"] ? overrides["optionset-coverage"].message : "Missing optionset",
+                                        details: `Option set '${optionSetName}' referenced in payload ${index} is missing from $optionSets array.`
+                                    });
+                                }
+                            }
+                        }
+                        traverse(value);
+                    }
+                }
+            }
+        }
+
+        traverse(payload);
+
+        if (payload.ReferencedEntity && systemEntities.includes(payload.ReferencedEntity.toLowerCase())) {
+            if (payload.CascadeConfiguration && payload.CascadeConfiguration.Assign !== "NoCascade") {
+                errors.push({
+                    rule: "system-entity-cascade",
+                    message: overrides["system-entity-cascade"] ? overrides["system-entity-cascade"].message : "Invalid cascade",
+                    details: `Payload ${index} references ${payload.ReferencedEntity} with Assign=${payload.CascadeConfiguration.Assign}`
+                });
+            }
+        }
+
+        if (schema && schema.entities) {
+            const entityNames = schema.entities.map(e => e.name.toLowerCase());
+            if (payload.ReferencedEntity && !entityNames.includes(payload.ReferencedEntity.toLowerCase())) {
+                errors.push({
+                    rule: "schema-entity-not-found",
+                    message: "Entity not found in schema",
+                    details: `ReferencedEntity '${payload.ReferencedEntity}' in payload ${index} does not exist in Dataverse schema.`
+                });
+            }
+            if (payload.ReferencingEntity && !entityNames.includes(payload.ReferencingEntity.toLowerCase())) {
+                errors.push({
+                    rule: "schema-entity-not-found",
+                    message: "Entity not found in schema",
+                    details: `ReferencingEntity '${payload.ReferencingEntity}' in payload ${index} does not exist in Dataverse schema.`
+                });
+            }
+        }
+    });
+
+    return errors;
+}
+
+module.exports = { validate };

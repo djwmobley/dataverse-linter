@@ -1,0 +1,18 @@
+{
+  "lastUpdated": "2026-05-04T20:11:38.400Z",
+  "entities": [
+    {
+      "name": "systemuser",
+      "properties": {
+        "systemuserid": "Edm.Guid",
+        "fullname": "Edm.String"
+      }
+    },
+    {
+      "name": "sample_initiative",
+      "properties": {
+        "sample_initiativeid": "Edm.Guid"
+      }
+    }
+  ]
+}

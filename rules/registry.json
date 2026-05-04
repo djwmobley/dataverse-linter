@@ -1,0 +1,93 @@
+[
+  {
+    "id": "R13",
+    "title": "$select dollar-sign escape in double-quoted strings",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\"([^\"\\\\]*)\\\\\\$(select|filter|expand)",
+    "message": "PowerShell expands $select in double quotes. Use backtick to escape.",
+    "enabled": true
+  },
+  {
+    "id": "R16",
+    "title": "Missing Start-Transcript",
+    "severity": "INFO",
+    "type": "regex-inverse",
+    "pattern": "Start-Transcript",
+    "message": "Script must contain Start-Transcript.",
+    "enabled": true
+  },
+  {
+    "id": "R25",
+    "title": "Unprefixed assignment shadows script",
+    "severity": "ERROR",
+    "type": "regex-template",
+    "pattern": "^\\s*\\$(${variables})\\s*=",
+    "variables": ["headers", "body", "conn", "options", "response", "result"],
+    "message": "Unprefixed assignment at script scope shadows $script:. Use a different name.",
+    "enabled": true
+  },
+  {
+    "id": "R07",
+    "title": "--force-overwrite does not resolve metadata conflicts",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "pac\\s+solution\\s+import.*--force-overwrite",
+    "message": "Use --force-overwrite only for property-level reconciliation. Delete conflicting attributes before import.",
+    "enabled": true
+  },
+  {
+    "id": "R12",
+    "title": "Connect-CrmOnlineDiscovery requires WinPS 5.1",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "Connect-CrmOnlineDiscovery|Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell",
+    "message": "These modules hang in pwsh. Ensure script has #Requires -Version 5.1 and runs under powershell.exe.",
+    "enabled": true
+  },
+  {
+    "id": "R18",
+    "title": "Boolean column body missing TrueOption/FalseOption",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\"@odata\\.type\"\\s*:\\s*\"#Microsoft\\.Dynamics\\.CRM\\.BooleanAttributeMetadata\"(?![^}]*\"TrueOption\")",
+    "message": "BooleanAttributeMetadata requires both TrueOption and FalseOption in the body.",
+    "enabled": true
+  },
+  {
+    "id": "R24",
+    "title": "pac solution import missing --publish-changes",
+    "severity": "WARN",
+    "type": "regex",
+    "pattern": "pac\\s+solution\\s+import(?![^\\n;|]*--publish-changes)",
+    "message": "pac solution import should include --publish-changes to ensure customizations are active.",
+    "enabled": true
+  },
+  {
+    "id": "R21",
+    "title": "Topological Stage Ordering",
+    "severity": "WARN",
+    "type": "regex",
+    "pattern": "Invoke-RestMethod[\\s\\S]*-Method\\s+POST[\\s\\S]*pac\\s+solution\\s+import",
+    "message": "Managed solution import should precede table/column creation to avoid metadata layering conflicts.",
+    "enabled": true
+  },
+  {
+    "id": "R26",
+    "title": "OData Type-Casting Constraints for FormulaDefinition",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "Attributes\\(LogicalName='[^']+'\\)\\?[^\"]*\\$select=[^\"]*FormulaDefinition",
+    "message": "Cannot query FormulaDefinition on base AttributeMetadata. Append a derived type cast (e.g., /Microsoft.Dynamics.CRM.DecimalAttributeMetadata) before the query string.",
+    "enabled": true
+  },
+  {
+    "id": "R28",
+    "title": "Idempotency Gate Verification",
+    "severity": "WARN",
+    "type": "regex-inverse",
+    "pattern": "if\\s*\\(\\$null\\s*-eq",
+    "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded.",
+    "enabled": true
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "odata-bind-guid": {
+    "enabled": true,
+    "message": "@odata.bind must use GUIDs, not alternate keys like Name='X'."
+  },
+  "system-entity-cascade": {
+    "enabled": true,
+    "message": "Relationships targeting system entities (like systemuser) must use Assign=NoCascade (Referential)."
+  },
+  "optionset-coverage": {
+    "enabled": true,
+    "message": "All global option sets referenced by picklist columns must be present in the script's bootstrap $optionSets array."
+  }
+}
