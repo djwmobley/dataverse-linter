@@ -77,7 +77,7 @@ console.log("Running Fail Battery...");
             overallPass = false;
         } else {
             // Assert no unexpected rule IDs fired.
-            const knownValidRules = [...expectedRules, 'schema-entity-not-found'];
+            const knownValidRules = [...expectedRules, 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch'];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
             if (unexpected.length > 0) {
@@ -224,6 +224,50 @@ const probes = [
         mustFire: [],
         mustNotFire: ['R25'],
         expectClean: true
+    },
+
+    // --- R29, R31, module-env-mismatch probes ---
+    {
+        file: path.join(__dirname, 'probe-r29-non-ascii-string.ps1'),
+        label: 'probe-r29-non-ascii-string',
+        // Em-dash (U+2014) inside a double-quoted string literal. R29 must fire.
+        mustFire: ['R29'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-r29-non-ascii-comment.ps1'),
+        label: 'probe-r29-non-ascii-comment',
+        // Em-dash appears only in comments and single-quoted strings. R29 must NOT fire.
+        mustFire: [],
+        mustNotFire: ['R29'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-r31-bad-cmdlet.ps1'),
+        label: 'probe-r31-bad-cmdlet',
+        // Connect-CrmOnlineDiscovery with -ShowProgress (known-bad param). R31 must fire.
+        // R12 and module-env-mismatch also fire; expectClean false.
+        mustFire: ['R31'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-module-env-mismatch.ps1'),
+        label: 'probe-module-env-mismatch',
+        // Import-Module Xrm.Tooling without #Requires -PSEdition Desktop. Rule must fire.
+        mustFire: ['module-env-mismatch'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-module-env-ok.ps1'),
+        label: 'probe-module-env-ok',
+        // Same import WITH #Requires -PSEdition Desktop. module-env-mismatch must NOT fire.
+        // R12 still fires unconditionally; expectClean false.
+        mustFire: [],
+        mustNotFire: ['module-env-mismatch'],
+        expectClean: false
     }
 ];
 

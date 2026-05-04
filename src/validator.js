@@ -91,6 +91,35 @@ function validate(extraction) {
         }
     });
 
+    // Module-environment compatibility check
+    const moduleReqsPath = path.join(__dirname, "../rules/module-requirements.json");
+    let moduleReqs = [];
+    if (fs.existsSync(moduleReqsPath)) {
+        moduleReqs = JSON.parse(fs.readFileSync(moduleReqsPath, "utf8"));
+    }
+
+    moduleReqs.forEach(req => {
+        if (!req.import_pattern || !req.requires_directives || req.requires_directives.length === 0) return;
+        const importRegex = new RegExp(req.import_pattern, "gm");
+        if (importRegex.test(strippedContent)) {
+            // Module is imported. Verify all required directives are present in rawContent.
+            // rawContent is used for the directive check: #Requires directives are comments
+            // and would be stripped by stripComments(), so we must check rawContent here.
+            const missing = req.requires_directives.filter(directive => {
+                const escaped = directive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const directiveRegex = new RegExp("^" + escaped, "m");
+                return !directiveRegex.test(rawContent);
+            });
+            if (missing.length > 0) {
+                errors.push({
+                    rule: req.rule_id,
+                    message: req.message,
+                    details: `Module '${req.module}' imported but missing required directive(s): ${missing.join(', ')}`
+                });
+            }
+        }
+    });
+
     payloads.forEach((payload, index) => {
         function traverse(obj) {
             if (typeof obj === "object" && obj !== null) {

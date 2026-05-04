@@ -8,7 +8,7 @@ Many Dataverse ALM scripts fail in non-obvious ways — formula columns blocked 
 
 ## Status
 
-Developed under adversarial review by an external "Judge" agent over four review phases. The substrate is currently approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content derivations, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
+Developed under adversarial review by an external "Judge" agent over five review phases. The substrate is currently approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content derivations, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
 
 ## Install
 
@@ -63,11 +63,14 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R25 | regex-template | ERROR | Assignment to a bare script-scope variable matching one of the configured names (default: `headers`, `body`, `conn`, `options`, `response`, `result`); these shadow `$script:` prefixed equivalents. |
 | R26 | regex | ERROR | OData query for `FormulaDefinition` on the base `AttributeMetadata` endpoint; a derived type cast is required (e.g., `/Microsoft.Dynamics.CRM.DecimalAttributeMetadata`). |
 | R28 | regex-inverse | WARN | Script lacks an idempotency guard (`if ($null -eq ...)`); Web API POST calls should be guarded against re-creation. |
+| R29 | regex | ERROR | Non-ASCII character (em-dash, section sign, smart quotes, ellipsis, bullet, en-dash, nbsp) inside a double-quoted string literal; PS 5.1's brace-counter silently misbehaves and produces `MissingEndCurlyBrace` at unrelated lines. Same chars in `#` comments are safe. |
+| R31 | regex-template | ERROR | Cmdlet+parameter combination known to fail at runtime. Default list seeded with `Connect-CrmOnlineDiscovery` + `-ShowProgress` (switch absent in `Microsoft.Xrm.Data.PowerShell` v2.8.21). Extend via `node src/rule-manager.js set-variables R31 <new-bad-pattern> ...`. |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
 | schema-entity-not-found | built-in | ERROR | `ReferencedEntity` or `ReferencingEntity` in a payload does not exist in `rules/schema.json`; fires only when a live schema has been fetched via `update-schema.js`. |
 | extractor-json-error | built-in | ERROR | A here-string payload could not be parsed as JSON; commonly caused by unescaped PowerShell variable interpolation inside a double-quoted here-string (`@"..."@`). |
+| module-env-mismatch | module-env | ERROR | Script imports a module with known runtime-environment prerequisites without declaring those prerequisites. Seeded entry: `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` requires `#Requires -PSEdition Desktop`. New entries are added by editing `rules/module-requirements.json`. |
 
 ## Rule types
 
@@ -124,6 +127,25 @@ Example — R25 checks a configurable list of variable names that must not be as
 ```
 
 At evaluation time, `${variables}` is replaced with `headers|body|conn|options|response|result`, producing a regex that matches any of those names at the start of an assignment.
+
+### Module-environment requirements
+
+A distinct rule category driven by `rules/module-requirements.json` rather than `rules/registry.json`. Each entry maps a module name to an import-detection pattern and a list of `#Requires` directives that must appear in the script. If the import pattern matches but none of the required directives are present, the linter fires `module-env-mismatch` at ERROR severity.
+
+Seeded entry shape:
+
+```json
+{
+  "module": "Microsoft.Xrm.Tooling.CrmConnector.PowerShell",
+  "import_pattern": "Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell|Connect-CrmOnlineDiscovery",
+  "requires_directives": ["#Requires -PSEdition Desktop"],
+  "rule_id": "module-env-mismatch",
+  "severity": "ERROR",
+  "message": "Microsoft.Xrm.Tooling.CrmConnector.PowerShell requires PowerShell 5.1 Desktop edition..."
+}
+```
+
+Adding a new module is a config-only edit — no validator code change is needed provided the new entry follows the same `import_pattern` + `requires_directives` shape.
 
 ## Content derivations
 
@@ -212,7 +234,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with all 14 known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **13 adversarial probes** — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules, single-quote here-string parsing, unparseable payloads with variable interpolation, backtick line-continuation handling for R24, semicolon- and pipe-terminated `pac solution import` calls, R25 with both default and non-default variable sets, and `system-entity-cascade` on a system entity.
+- **18 adversarial probes** — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules, single-quote here-string parsing, unparseable payloads with variable interpolation, backtick line-continuation handling for R24, semicolon- and pipe-terminated `pac solution import` calls, R25 with both default and non-default variable sets, `system-entity-cascade` on a system entity, non-ASCII chars inside double-quoted strings (R29), non-ASCII chars inside `#` comments (R29 safe-path), known-bad cmdlet+param combination (R31), module import without required directive (`module-env-mismatch`), and module import with required directive present (clean path).
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one.
@@ -235,4 +257,4 @@ MIT. See the LICENSE file.
 
 ## Provenance
 
-Developed by Dan Mobley (djwmobley) with iterative adversarial review by an automated "Judge" agent over four phases. Review record archived externally.
+Developed by Dan Mobley (djwmobley) with iterative adversarial review by an automated "Judge" agent over five phases. Review record archived externally.

@@ -1,6 +1,6 @@
 {
   "name": "dataverse-linter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone Node.js static analyzer for PowerShell scripts targeting the Dataverse Web API and pac solution CLI.",
   "main": "src/index.js",
   "bin": {

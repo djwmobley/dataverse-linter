@@ -23,7 +23,14 @@
     "severity": "ERROR",
     "type": "regex-template",
     "pattern": "^\\s*\\$(${variables})\\s*=",
-    "variables": ["headers", "body", "conn", "options", "response", "result"],
+    "variables": [
+      "headers",
+      "body",
+      "conn",
+      "options",
+      "response",
+      "result"
+    ],
     "message": "Unprefixed assignment at script scope shadows $script:. Use a different name.",
     "enabled": true
   },
@@ -88,6 +95,27 @@
     "type": "regex-inverse",
     "pattern": "if\\s*\\(\\$null\\s*-eq",
     "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded.",
+    "enabled": true
+  },
+  {
+    "id": "R29",
+    "title": "Non-ASCII character in PowerShell double-quoted string literal",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\"[^\"\\r\\n]*[\\u00A0\\u00A7\\u2013\\u2014\\u2018\\u2019\\u201C\\u201D\\u2022\\u2026][^\"\\r\\n]*\"",
+    "message": "Non-ASCII character inside a double-quoted string literal will silently corrupt PowerShell 5.1 brace-counting and may produce MissingEndCurlyBrace at unrelated lines. Replace with ASCII (e.g., em-dash to '--', section sign to 'S', smart quotes to straight quotes).",
+    "enabled": true
+  },
+  {
+    "id": "R31",
+    "title": "Known-bad cmdlet+parameter combination",
+    "severity": "ERROR",
+    "type": "regex-template",
+    "pattern": "(${variables})",
+    "variables": [
+      "Connect-CrmOnlineDiscovery[^\\n;|]*-ShowProgress"
+    ],
+    "message": "Cmdlet+parameter combination is known not to exist in the deployed module version. Verify with Get-Help or remove. (See: https://github.com/djwmobley/dataverse-linter for the full known-bad list.)",
     "enabled": true
   }
 ]

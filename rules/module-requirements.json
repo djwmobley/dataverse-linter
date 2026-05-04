@@ -1,0 +1,10 @@
+[
+  {
+    "module": "Microsoft.Xrm.Tooling.CrmConnector.PowerShell",
+    "import_pattern": "Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell|Connect-CrmOnlineDiscovery",
+    "requires_directives": ["#Requires -PSEdition Desktop"],
+    "rule_id": "module-env-mismatch",
+    "severity": "ERROR",
+    "message": "Microsoft.Xrm.Tooling.CrmConnector.PowerShell requires PowerShell 5.1 Desktop edition (incompatible with pwsh 7 Core). Add '#Requires -PSEdition Desktop' to fail-fast on wrong-runtime invocation."
+  }
+]
