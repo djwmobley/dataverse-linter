@@ -1,3 +1,4 @@
+#Requires -PSEdition Desktop
 $transcriptPath = "logs\run.log"
 Start-Transcript -Path $transcriptPath -Append
 

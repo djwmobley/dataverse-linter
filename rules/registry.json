@@ -9,15 +9,6 @@
     "enabled": true
   },
   {
-    "id": "R16",
-    "title": "Missing Start-Transcript",
-    "severity": "INFO",
-    "type": "regex-inverse",
-    "pattern": "Start-Transcript",
-    "message": "Script must contain Start-Transcript.",
-    "enabled": true
-  },
-  {
     "id": "R25",
     "title": "Unprefixed assignment shadows script",
     "severity": "ERROR",
@@ -64,19 +55,19 @@
   {
     "id": "R24",
     "title": "pac solution import missing --publish-changes",
-    "severity": "WARN",
+    "severity": "ERROR",
     "type": "regex",
     "pattern": "pac\\s+solution\\s+import(?![^\\n;|]*--publish-changes)",
-    "message": "pac solution import should include --publish-changes to ensure customizations are active.",
+    "message": "pac solution import should include --publish-changes to ensure customizations are active. A successful import without this flag leaves customizations unpublished and the deployment is half-broken.",
     "enabled": true
   },
   {
     "id": "R21",
     "title": "Topological Stage Ordering",
-    "severity": "WARN",
+    "severity": "ERROR",
     "type": "regex",
     "pattern": "Invoke-RestMethod[\\s\\S]*-Method\\s+POST[\\s\\S]*pac\\s+solution\\s+import",
-    "message": "Managed solution import should precede table/column creation to avoid metadata layering conflicts.",
+    "message": "Managed solution import should precede table/column creation to avoid metadata layering conflicts. If a column creation POST runs before its owning solution is imported, Dataverse may reject the operation or produce an orphaned component.",
     "enabled": true
   },
   {
@@ -91,10 +82,10 @@
   {
     "id": "R28",
     "title": "Idempotency Gate Verification",
-    "severity": "WARN",
+    "severity": "ERROR",
     "type": "regex-inverse",
     "pattern": "if\\s*\\(\\$null\\s*-eq",
-    "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded.",
+    "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded. Re-runs without a guard will create duplicate records in Dataverse.",
     "enabled": true
   },
   {
@@ -115,7 +106,52 @@
     "variables": [
       "Connect-CrmOnlineDiscovery[^\\n;|]*-ShowProgress"
     ],
-    "message": "Cmdlet+parameter combination is known not to exist in the deployed module version. Verify with Get-Help or remove. (See: https://github.com/djwmobley/dataverse-linter for the full known-bad list.)",
+    "message": "Cmdlet+parameter combination is known not to exist in the deployed module version. Verify with Get-Help or remove. (See: https://github.com/djwmobley/dataverse-linter for the full known-bad list.) Source: https://github.com/seanmcne/Microsoft.Xrm.Data.PowerShell/blob/master/Microsoft.Xrm.Data.PowerShell/Microsoft.Xrm.Data.PowerShell.psm1",
+    "enabled": true
+  },
+  {
+    "id": "R32",
+    "title": "Connect-PnPOnline -TenantId is not a valid parameter",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "Connect-PnPOnline\\b[^'\\n]*-TenantId\\b",
+    "message": "Connect-PnPOnline does not have a -TenantId parameter. The correct parameter is -Tenant (accepts a tenant name such as mycompany.onmicrosoft.com). This will fail at runtime with a parameter-binding error. See: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html",
+    "enabled": true
+  },
+  {
+    "id": "R33",
+    "title": "Publish-PnPPage does not exist in PnP.PowerShell 3.x",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\\bPublish-PnPPage\\b",
+    "message": "Publish-PnPPage does not exist in PnP.PowerShell 3.x. Use Set-PnPPage -Identity <name> -Publish instead. This script will fail at runtime with a command-not-found error. See: https://pnp.github.io/powershell/cmdlets/Set-PnPPage.html",
+    "enabled": true
+  },
+  {
+    "id": "R34",
+    "title": "pac install is not a valid pac command group",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\\bpac\\s+install\\b",
+    "message": "pac install is not a recognized pac command group. The pac CLI has no 'install' top-level command. The closest valid surface is 'pac application install --environment-id <id> --application-name <name>'. This will fail at CLI parse time with 'unknown command'. See: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/",
+    "enabled": true
+  },
+  {
+    "id": "R35",
+    "title": "[Parser]::ParseFile with both output args as [ref]$null discards all diagnostics",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "ParseFile\\s*\\(\\s*[^,]+,\\s*\\[ref\\]\\s*\\$null\\s*,\\s*\\[ref\\]\\s*\\$null\\s*\\)",
+    "message": "[Parser]::ParseFile($p, [ref]$null, [ref]$null) silently discards all parsed tokens and all parse errors. Both 'tokens' and 'errors' are out parameters per the .NET API; passing [ref]$null writes them into unreachable references and the caller cannot inspect the parse result. Correct usage: $tokens=$null; $errs=$null; [Parser]::ParseFile($path, [ref]$tokens, [ref]$errs). See: https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.language.parser.parsefile",
+    "enabled": true
+  },
+  {
+    "id": "R36",
+    "title": "[datetime]::TryParse with [ref]$null causes overload-resolution hazard",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\\[datetime\\]::TryParse\\s*\\(\\s*[^,]+,\\s*\\[ref\\]\\s*\\$null\\s*\\)",
+    "message": "[datetime]::TryParse($s, [ref]$null) is an overload-resolution hazard. The 2-argument .NET overloads expect (String, out DateTime) or (ReadOnlySpan<Char>, out DateTime); passing [ref]$null makes the parsed DateTime value unreachable, and on .NET 7+ may resolve to a different overload and fail outright. Use '$result = $s -as [datetime]' instead: returns $null on failure with no exception and no overload ambiguity. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse",
     "enabled": true
   }
 ]
