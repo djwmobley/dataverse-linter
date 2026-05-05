@@ -852,6 +852,21 @@ const probes = [
         expectClean: false
     },
     {
+        file: path.join(__dirname, 'probe-R28-post-quoted-method-no-guard.ps1'),
+        label: 'probe-R28-post-quoted-method-no-guard',
+        // HIGH-1 fix-pass regression anchor (round-2 review finding 1).
+        // POST mutation present with QUOTED method literal -- the form that
+        // pre-fix v0.4.2 silently skipped because requires_present ran against
+        // the string-stripped view (noCommentNoStringContent -> "" for "POST").
+        // Post-fix uses normalizedContent (strings preserved), so the
+        // precondition matches POST inside the quotes and R28 fires.
+        // Pinning this probe forces a battery red on any future revert of
+        // the validator.js content-view choice. R28 MUST fire.
+        mustFire: ['R28'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
         file: path.join(__dirname, 'probe-R28-post-with-guard.ps1'),
         label: 'probe-R28-post-with-guard',
         // True negative anchor: POST mutation present AND guard present.
