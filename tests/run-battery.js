@@ -679,6 +679,70 @@ const probes = [
     },
 
     // =========================================================================
+    // v0.4.1 R12 block-comment guard fix (round-2 SHOWSTOPPER on PR #3)
+    // Round-1 ratified the conjunction-aware suppression. Round-2 found a
+    // false negative: a `#Requires` directive nested inside a `<# ... #>`
+    // block comment satisfied the guard regex against rawContent, but
+    // PowerShell does not honor block-comment-internal `#Requires` lexemes
+    // at parse time (they are comment content per about_Comments + must be
+    // "the first item on a line" per about_Requires, which a comment-internal
+    // lexeme is not). v0.4.1 introduces stripBlockComments() in extractor.js
+    // and tests requires_absent against rawContentNoBlockComments instead of
+    // rawContent. Line-comment `#Requires` directives remain visible (this
+    // is the form PS actually honors); block-comment-nested ones are blanked.
+    //
+    // Citations:
+    //   - about_Comments: "you can't nest block comments. If you attempt to
+    //     nest block comments, the outer block comment ends at the first
+    //     `#>` encountered." -- justifies non-greedy <#[\s\S]*?#> regex.
+    //   - about_Requires: "Each `#Requires` statement must be the first item
+    //     on a line" -- substrate basis for comment-internal lexemes being
+    //     non-directives.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R12-block-comment-requires.ps1'),
+        label: 'probe-R12-block-comment-requires',
+        // Round-2 SHOWSTOPPER repro (single-line block-comment form):
+        // `<# #Requires -Version 5.1 #>` followed by Connect-CrmOnlineDiscovery.
+        // PS does not honor the directive; R12 MUST fire.
+        mustFire: ['R12'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-block-comment-requires-line-form.ps1'),
+        label: 'probe-R12-block-comment-requires-line-form',
+        // Round-2 reviewer's exact reproduction (multi-line block-comment form):
+        // `<#` and `#>` on their own lines, `#Requires -Version 5.1` at column 0
+        // on a middle line. v0.3.1 missed this; v0.4.1 catches it. R12 MUST fire.
+        mustFire: ['R12'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-line-comment-requires-still-works.ps1'),
+        label: 'probe-R12-line-comment-requires-still-works',
+        // Regression anchor: canonical line-comment `#Requires -Version 5.1`
+        // (NOT inside `<# #>`). PS honors this; the guard view must keep it
+        // visible. R12 MUST NOT fire. Pins behavior so future widening of
+        // stripBlockComments doesn't regress line-comment recognition.
+        mustFire: [],
+        mustNotFire: ['R12'],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-mixed-block-and-line.ps1'),
+        label: 'probe-R12-mixed-block-and-line',
+        // Mixed form: a benign `<# block comment without requires #>` AND a
+        // real line-comment `#Requires -Version 5.1`. Asserts that block-comment
+        // stripping is range-bounded and doesn't damage line-comment guard
+        // recognition. R12 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R12'],
+        expectClean: false
+    },
+
+    // =========================================================================
     // v0.3.1 R25 scope-aware refinement
     // R25 fires only on assignments at script scope (not inside any
     // `function NAME { ... }` body). Implementation: extractor.computeFunctionBodyRanges

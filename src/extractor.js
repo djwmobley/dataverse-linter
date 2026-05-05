@@ -12,6 +12,56 @@ function stripComments(content) {
 }
 
 /**
+ * Produce a derivation of `rawContent` with every PowerShell block-comment range
+ * (<# ... #>) length-preservingly space-filled (newlines preserved). Used by
+ * rules with `requires_absent` guards so that a `#Requires` directive nested
+ * inside a `<# ... #>` block comment is NOT recognized as a guard, matching
+ * PowerShell's actual parser behavior (the runtime ignores it).
+ *
+ * Why a third view (rather than reusing strippedContent or noCommentNoStringContent):
+ *   - strippedContent removes only `^\s*#.*$` (line comments). It blanks the
+ *     literal `#>` close tokens but does not blank the body of a multi-line
+ *     `<# ... #>` block. A `#Requires` directive on a body line at column 0
+ *     therefore survives in strippedContent.
+ *   - noCommentNoStringContent removes block comments AND string literals AND
+ *     line comments — too aggressive for a guard check, which must keep the
+ *     LINE-comment `#Requires` directives (those ARE honored by PowerShell)
+ *     visible.
+ *   - This view removes ONLY `<# ... #>` ranges, which is the minimum surgery
+ *     needed to fix the round-2 false negative without regressing the
+ *     line-comment guard recognition.
+ *
+ * Length preservation keeps byte-index alignment with `rawContent`, matching
+ * the same invariant `stripComments` adopted in v0.3.1. No current caller
+ * depends on the alignment (the guard test is a regex .test() that only
+ * needs match/no-match), but preservation costs nothing and keeps the view
+ * usable for any future caller that does need alignment.
+ *
+ * Substrate citation for the non-greedy regex (`<#[\s\S]*?#>`):
+ *   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comments
+ *     (about_Comments, "PowerShell comment styles" section, "Important" callout):
+ *     "you can't nest block comments. If you attempt to nest block comments,
+ *     the outer block comment ends at the first `#>` encountered."
+ *   - Same page, "Notes" section: "Block comments can't be nested."
+ *   Therefore non-greedy first-`#>`-wins matching is correct: an inner `<#`
+ *   inside an outer block comment carries no special meaning, and the first
+ *   `#>` always closes the outermost (and only) block.
+ *
+ * Substrate citation for the false negative this fixes:
+ *   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_requires
+ *     ("Examples" section): "Each `#Requires` statement must be the first item
+ *     on a line". Inside a `<# ... #>` block, the body lines are comment text
+ *     per about_Comments ("All text within the block is treated as part of the
+ *     same comment, including whitespace"), so a `#Requires` lexeme inside
+ *     the block is not a directive — it is comment content, and PowerShell
+ *     does not honor it at parse time. R12's guard must mirror that behavior.
+ */
+function stripBlockComments(content) {
+    // Non-greedy <# ... #>; per about_Comments, block comments do not nest.
+    return content.replace(/<#[\s\S]*?#>/g, (m) => m.replace(/[^\r\n]/g, ' '));
+}
+
+/**
  * Produce a derivation of content with block comments, string literals, and inline
  * comments removed. Used exclusively for regex-inverse rules (R28) so that
  * bypass text hidden in comments or strings cannot satisfy a pattern that should only
@@ -231,6 +281,12 @@ function extract(filePath) {
     const content = fs.readFileSync(filePath, "utf8");
     const strippedContent = stripComments(content);
     const noCommentNoStringContent = buildNoCommentNoStringContent(content);
+    // v0.4.1: third content view. rawContent with `<# ... #>` ranges
+    // length-preservingly space-filled. Used by validator for `requires_absent`
+    // guard checks so that a `#Requires` lexeme inside a block comment is
+    // NOT treated as an active guard (matching PS parser behavior). See
+    // stripBlockComments() docstring for substrate citations and rationale.
+    const rawContentNoBlockComments = stripBlockComments(content);
     // Compute function-body ranges against rawContent. stripComments now preserves
     // length (replaces matched chars with spaces so newlines and offsets align), so
     // ranges computed against rawContent are valid for matches whose index is
@@ -272,7 +328,7 @@ function extract(filePath) {
         }
     }
 
-    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, functionBodyRanges, filePath };
+    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, functionBodyRanges, filePath };
 }
 
-module.exports = { extract, computeFunctionBodyRanges, isInsideAnyRange };
+module.exports = { extract, computeFunctionBodyRanges, isInsideAnyRange, stripBlockComments };

@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 function validate(extraction) {
-    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, functionBodyRanges, filePath } = extraction;
+    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, functionBodyRanges, filePath } = extraction;
     const errors = [...(parseErrors || [])];
 
     // Helper: returns true if `idx` lies strictly inside any [start, end) range.
@@ -59,15 +59,30 @@ function validate(extraction) {
 
         // requires_absent (regex / regex-template only): a conjunction guard.
         // The rule fires only when the main pattern matches AND the
-        // requires_absent regex does NOT match the rawContent. requires_absent
-        // is matched against rawContent so that #Requires comment directives
-        // (which strippedContent removes) remain visible to the guard check.
+        // requires_absent regex does NOT match the guard view.
+        //
+        // Guard view is `rawContentNoBlockComments` — rawContent with every
+        // `<# ... #>` block-comment range length-preservingly space-filled.
+        // Rationale (v0.4.1, addressing round-2 review of PR #3):
+        //   - Line-comment `#Requires` directives (the canonical form) are
+        //     STILL VISIBLE in this view because stripBlockComments only
+        //     blanks block-comment ranges, not line-comment text.
+        //   - Block-comment-nested `#Requires` lexemes are NOT VISIBLE in
+        //     this view, matching PowerShell parser behavior: text inside
+        //     `<# ... #>` is comment content (about_Comments: "All text
+        //     within the block is treated as part of the same comment"),
+        //     and a `#Requires` directive must be "the first item on a line"
+        //     (about_Requires) — which a comment-internal lexeme is not.
+        // Previously (v0.3.1) this test ran against `rawContent`, which
+        // matched a block-comment-nested `#Requires -Version 5.1` and
+        // suppressed R12 even though PowerShell would not honor the
+        // directive at runtime — false negative; round-2 SHOWSTOPPER.
         let requiresAbsentSatisfied = true;
         if (rule.requires_absent) {
             const guardRe = new RegExp(rule.requires_absent, "m");
             // If the guard pattern IS present, the requires_absent condition is
             // NOT satisfied -- meaning the rule should NOT fire (guard in place).
-            if (guardRe.test(rawContent)) {
+            if (guardRe.test(rawContentNoBlockComments)) {
                 requiresAbsentSatisfied = false;
             }
         }
