@@ -10,6 +10,79 @@ Many Dataverse ALM scripts fail in non-obvious ways — formula columns blocked 
 
 Every rule in this linter has severity **ERROR**. The design principle: if a pattern expresses a real failure mode it is an ERROR; if it does not, the rule should not exist. There are no WARN or INFO rules. If a proposed rule cannot be linked to a concrete runtime failure, it is not added.
 
+This severity policy applies uniformly across all three enforcement surfaces described below.
+
+## Enforcement surfaces
+
+The linter enforces rules at three distinct surfaces. All three call the same `node src/index.js` binary; no surface has separate rules.
+
+### 1. PostToolUse — `hooks/posttool-lint.js`
+
+Triggered after every `Write` or `Edit` tool call. Lints the file at `tool_input.file_path` if the extension is `.ps1`. Files inside the linter repo itself are skipped (so probe fixtures are not blocked during linter development).
+
+Payload contract (`PostToolUse`):
+```json
+{ "tool_name": "Write|Edit", "tool_input": { "file_path": "...", "content|new_string|..." } }
+```
+
+Blocking: exit code 2; stderr text is fed back to the assistant as a violation report.
+
+Wire-up in `~/.claude/settings.json`:
+```json
+"PostToolUse": [{ "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": "node C:/gemini/dataverse-linter/hooks/posttool-lint.js" }] }]
+```
+
+### 2. Stop — `hooks/stop-lint-chat.js`
+
+Triggered when Claude Code is about to stop (end a turn). Reads the transcript JSONL at `payload.transcript_path`, finds the last assistant turn, regex-extracts every fenced block whose language tag matches (case-insensitive) `powershell`, `pwsh`, `ps1`, or `posh`, writes each block to a temp `.ps1` file, and lints it. The fence regex accepts both column-0 fences and fences that follow inline prose on the same line (e.g., `Run this: ```powershell`). Generic `shell` and no-label fences are intentionally excluded. Non-PS fenced blocks (`bash`, `js`, etc.) and plain prose pass through silently. Temp files are deleted after each lint run.
+
+Payload contract (`Stop`, documented at https://code.claude.com/docs/en/hooks):
+```json
+{ "hook_event_name": "Stop", "session_id": "...", "transcript_path": "/path/to/session.jsonl", "cwd": "...", "permission_mode": "..." }
+```
+
+The assistant's final turn text is not directly in the payload. It is in the JSONL file at `transcript_path`. Each line is a JSON object; the last object with `role: "assistant"` contains the response.
+
+Blocking: exit code 2; stderr text is fed back to the assistant as a violation report. The hook degrades gracefully (exits 0) if the payload is malformed, the transcript file is missing, or no PS fenced blocks are present.
+
+Wire-up in `~/.claude/settings.json`:
+```json
+"Stop": [{ "hooks": [{ "type": "command", "command": "node C:/gemini/dataverse-linter/hooks/stop-lint-chat.js" }] }]
+```
+
+### 3. PreToolUse (Bash) — `hooks/pretool-lint-bash.js`
+
+Triggered before every `Bash` tool call. Inspects `tool_input.command` and extracts inline PowerShell from these forms:
+- `pwsh -Command "..."` / `pwsh -c "..."` (double-quoted body)
+- `pwsh -Command '...'` / `pwsh -c '...'` (single-quoted body)
+- `powershell -Command "..."` / `powershell.exe -Command "..."`
+- `pwsh -EncodedCommand <base64>` / `pwsh -enc <base64>` (UTF-16LE per Microsoft contract; round-trip-decoded and linted)
+- `pwsh << 'WORD' ... WORD` (heredoc directly to pwsh)
+- `<body> WORD | pwsh` (heredoc with pipe on the closing line)
+- `cat << 'WORD' | pwsh\n<body>\nWORD` (heredoc with pipe on the opening line)
+- `echo "<lit>" | pwsh` / `printf "..." | pwsh` (literal stdin pipe; body lifted)
+- `sh -c "$(...)"` / `bash -c "$(...)"` (subshell substitution; recursively scanned, depth cap 3)
+
+Mixed shapes (e.g., `pwsh -File ok.ps1; pwsh -Command "<inline>"`) extract and lint the inline portion. The `-File path.ps1` portion was linted at write time by the PostToolUse hook.
+
+Known limitation -- `cat <file> | pwsh`: the hook cannot read arbitrary files at hook time, so this shape is detected and refused (exit 2) with a stderr message asking the author to inline the body via `pwsh -Command` or write the file via Write/Edit (which routes through the PostToolUse linter gate).
+
+Non-Bash tool calls and Bash commands without inline PS pass through silently.
+
+EncodedCommand decoding contract: per [about_PowerShell_exe](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe), "Accepts a base-64-encoded string version of a command. ... The string must be formatted using UTF-16LE character encoding." The hook decodes via `Buffer.from(b64, 'base64').toString('utf16le')`, which is round-trip-equivalent to PowerShell's `[System.Text.Encoding]::Unicode.GetBytes()` encoder. Malformed b64 is detect-and-block.
+
+Payload contract (`PreToolUse`, documented at https://code.claude.com/docs/en/hooks):
+```json
+{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "pwsh -Command \"...\"", "description": "...", "timeout": 120000 }, "tool_use_id": "..." }
+```
+
+Blocking: exit code 2; stderr text is fed back to the assistant as a block reason.
+
+Wire-up in `~/.claude/settings.json`:
+```json
+"PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "node C:/gemini/dataverse-linter/hooks/pretool-lint-bash.js" }] }]
+```
+
 ## Status
 
 Developed under adversarial review by an external "Judge" agent over six review phases. The substrate is approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content derivations, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
