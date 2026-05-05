@@ -87,6 +87,7 @@
     "severity": "ERROR",
     "type": "regex-inverse",
     "pattern": "if\\s*\\(\\$null\\s*-eq",
+    "requires_present": "(?:Invoke-RestMethod|Invoke-WebRequest)[^\\n]*-Method\\s+[\"']?(?:POST|Post|post|PATCH|Patch|patch|PUT|Put|put)[\"']?",
     "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded. Re-runs without a guard will create duplicate records in Dataverse.",
     "enabled": true
   },

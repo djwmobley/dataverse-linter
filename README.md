@@ -138,7 +138,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R24 | regex | ERROR | `pac solution import` without `--publish-changes`; customizations remain unpublished after import, leaving the deployment half-broken. |
 | R25 | regex-template (script-scope only) | ERROR | Assignment to a bare script-scope variable matching one of the configured names (default: `headers`, `body`, `conn`, `options`, `response`, `result`); these shadow `$script:` prefixed equivalents. v0.3.1 made the rule scope-aware via `scope: "script-only"`: matches inside a `function NAME { ... }` body are suppressed because PowerShell function bodies have their own variable scope and cannot shadow `$script:`. |
 | R26 | regex | ERROR | OData query for `FormulaDefinition` on the base `AttributeMetadata` endpoint; a derived type cast is required (e.g., `/Microsoft.Dynamics.CRM.DecimalAttributeMetadata`). |
-| R28 | regex-inverse | ERROR | Script lacks an idempotency guard (`if ($null -eq ...)`); Web API POST calls without a guard create duplicate records on every re-run. |
+| R28 | regex-inverse (conjunction) | ERROR | Script lacks an idempotency guard (`if ($null -eq ...)`); Web API POST calls without a guard create duplicate records on every re-run. v0.4.2 made the rule conjunction-aware via `requires_present`: it applies only when the file actually contains a Dataverse Web API mutation call (`Invoke-RestMethod`/`Invoke-WebRequest` with `-Method POST`/`PATCH`/`PUT`). Minimal snippets without a mutation no longer false-positive. |
 | R29 | regex | ERROR | Non-ASCII character (em-dash, section sign, smart quotes, ellipsis, bullet, en-dash, nbsp) inside a double-quoted string literal; PS 5.1's brace-counter silently misbehaves and produces `MissingEndCurlyBrace` at unrelated lines. Same chars in `#` comments are safe. |
 | R31 | regex-template | ERROR | Cmdlet+parameter combination known to fail at runtime. Default list seeded with `Connect-CrmOnlineDiscovery` + `-ShowProgress` (switch absent in `Microsoft.Xrm.Data.PowerShell` v2.8.21). Extend via `node src/rule-manager.js set-variables R31 <new-bad-pattern> ...`. |
 | R32 | regex | ERROR | `Connect-PnPOnline -TenantId` usage; `-TenantId` is not a valid parameter on `Connect-PnPOnline` (PnP.PowerShell 3.x). The correct parameter is `-Tenant`. See: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html |
@@ -151,7 +151,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
 | schema-entity-not-found | built-in | ERROR | `ReferencedEntity` or `ReferencingEntity` in a payload does not exist in `rules/schema.json`; fires only when a live schema has been fetched via `update-schema.js`. |
 | extractor-json-error | built-in | ERROR | A here-string payload could not be parsed as JSON; commonly caused by unescaped PowerShell variable interpolation inside a double-quoted here-string (`@"..."@`). |
-| module-env-mismatch | module-env | ERROR | Script imports a module with known runtime-environment prerequisites without declaring those prerequisites. Seeded entries: `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` and `Microsoft.Xrm.Data.PowerShell` both require `#Requires -PSEdition Desktop`. New entries are added by editing `rules/module-requirements.json`. |
+| module-env-mismatch | module-env | ERROR | Script imports a module with known runtime-environment prerequisites without declaring those prerequisites. Seeded entries: `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` and `Microsoft.Xrm.Data.PowerShell` both require `#Requires -PSEdition Desktop`. v0.4.2 fixed a false negative where a `#Requires` lexeme nested inside a `<# ... #>` block comment satisfied the directive presence check (it was tested against `rawContent`); the check now uses `rawContentNoBlockComments`, mirroring the v0.4.1 R12 fix on the `requires_absent` path. New entries are added by editing `rules/module-requirements.json`. |
 
 ## Failure modes
 
@@ -246,6 +246,29 @@ Implementation: `extractor.computeFunctionBodyRanges(rawContent)` walks the file
 
 Web API POST calls to create Dataverse records fail on re-run if the record already exists (duplicate detection or unique constraint violations). A script that runs `Invoke-RestMethod -Method POST` without first checking whether the target entity exists (`if ($null -eq $existing)`) is not safe to re-run. Every ALM script should guard POST calls with an existence check. **Known limitation:** R28 is a `regex-inverse` rule that checks for the presence of `if ($null -eq` anywhere in the script. It does not verify that the guard actually wraps the POST call — a script with a guard that is unrelated to the POST calls would satisfy the rule.
 
+**v0.4.2 — conjunction-aware via `requires_present`:** R28 now applies only when the file actually contains a Dataverse Web API mutation call. The `requires_present` regex matches `Invoke-RestMethod` or `Invoke-WebRequest` with `-Method` set to one of `POST`, `PATCH`, or `PUT` (case variants of each). If no mutation call is present, R28 is skipped entirely — the rule does not apply.
+
+This closed a v0.4.0 round-1 known limitation: minimal snippets such as `pwsh -Command "Get-Date"` or any script that does not call the Web API at all tripped R28 because the inverse pattern was absent file-wide. With the conjunction in place, R28 fires only when the rule's stated intent applies — a real mutation call exists and is unguarded.
+
+The `requires_present` check uses `targetContent` (the same view the main inverse-pattern check uses, which is `noCommentNoStringContent` for `regex-inverse` rules). A mutation-shaped string inside a comment or string literal does not force the rule to apply; this is consistent with the bypass-prevention semantics of `regex-inverse`.
+
+**Substrate citations for the mutation-method list:**
+
+- Create (POST): https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api — "Send a `POST` request to the Web API entityset resource to create a table row (entity record) in Microsoft Dataverse."
+- Update (PATCH): https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/update-delete-entities-using-web-api — "Update operations use the HTTP `PATCH` verb. Pass a JSON object containing the properties you want to update to the URI that represents the record."
+- Single-property update (PUT): same page — "To update a single property value, use a `PUT` request and add the property name to the entity's Uri."
+- Upsert (PATCH): same page — "It uses a `PATCH` request and uses a URI to reference a specific record."
+
+DELETE is intentionally excluded from `requires_present`: HTTP DELETE is idempotent by spec, so a re-run does not create duplicates (the second call simply returns 404). The idempotency-guard rule's stated intent is to prevent duplicate-create on re-run, which DELETE cannot cause.
+
+**Probes (v0.4.2):**
+
+- `probe-R28-no-mutation-no-guard.ps1` — single-line `Get-Date` snippet with neither mutation nor guard. R28 does NOT fire (regression anchor for the v0.4.0 known limitation).
+- `probe-R28-post-no-guard.ps1` — POST mutation present, no guard. R28 fires (canonical R28 case).
+- `probe-R28-post-with-guard.ps1` — POST mutation present, guard present. R28 does NOT fire (true negative anchor for legitimate guarded code).
+- `probe-R28-get-only-no-guard.ps1` — `-Method Get` only, no guard. R28 does NOT fire (read-only path; GET is not a mutation per substrate).
+- `probe-R28-patch-no-guard.ps1` — PATCH mutation present, no guard. R28 fires (extends conjunction coverage beyond POST).
+
 ### R29 — Non-ASCII characters in double-quoted string literals
 
 PowerShell 5.1 (Windows PowerShell) has a brace-counting parser defect where multi-byte Unicode characters inside double-quoted string literals corrupt internal state, causing `MissingEndCurlyBrace` parse errors at lines that have nothing wrong with them. Characters such as em-dash (`—`, U+2014), en-dash, smart quotes, ellipsis, section sign, and non-breaking space are common culprits introduced by copy-paste from Word or Confluence. The same characters in `#` comments are safe. Replace with ASCII equivalents (em-dash to `--`, section sign to `S`, smart quotes to straight quotes).
@@ -326,6 +349,18 @@ Both require `#Requires -PSEdition Desktop`. Add new entries to `rules/module-re
 
 **Import form coverage:** the `import_pattern` for both seeded entries accepts both the positional form (`Import-Module Microsoft.Xrm.Data.PowerShell`) and the explicit-named form (`Import-Module -Name Microsoft.Xrm.Data.PowerShell`), with optional single or double quotes around the module name. New entries should follow the same shape. See `probe-module-env-xrmdata-name-form.ps1`.
 
+**v0.4.2 — block-comment guard fix (round-3 of PR #3 review):** The directive presence check changed from `rawContent` to `rawContentNoBlockComments`. Round-3 reviewer found a false negative analogous to the v0.4.1 R12 round-2 finding on a different rule path: a `#Requires -PSEdition Desktop` directive nested inside a `<# ... #>` block comment satisfied the rawContent regex, but PowerShell does not honor `#Requires` lexemes inside block comments at parse time — the script can still be launched under the wrong runtime and the import will silently fail or hang. The fix structurally mirrors the v0.4.1 R12 fix: both code paths now test the directive guard against `rawContentNoBlockComments` (the block-comment-stripped view produced by `extractor.stripBlockComments()`). Line-comment `#Requires -PSEdition Desktop` directives (the form PS honors at parse time) remain visible.
+
+**Probes (v0.4.2):**
+
+- `probe-module-env-block-comment-requires.ps1` — `<# #Requires -PSEdition Desktop #>` followed by `Import-Module Microsoft.Xrm.Tooling.CrmConnector.PowerShell`. The block-comment-internal directive is not honored by PS, so module-env-mismatch fires. Pins the round-3 fix.
+- `probe-module-env-line-comment-still-works.ps1` — canonical line-comment `#Requires -PSEdition Desktop` at column 0. PS honors this; module-env-mismatch does NOT fire. Regression anchor that pins line-comment directive recognition so future widening of `stripBlockComments` cannot regress it.
+
+**Substrate citations:**
+
+- about_Comments: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comments — "All text within the block is treated as part of the same comment, including whitespace."
+- about_Requires: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_requires — "Each `#Requires` statement must be the first item on a line."
+
 ## Rule types
 
 ### `regex`
@@ -362,11 +397,11 @@ Example — R28 fires when `if ($null -eq` is missing from real executable code:
 }
 ```
 
-### Optional rule fields (regex / regex-template) — v0.3.1
+### Optional rule fields (regex / regex-template / regex-inverse)
 
-Both `regex` and `regex-template` rules accept these optional fields:
+The following optional fields refine when a rule applies. All three rule types accept these unless noted otherwise.
 
-#### `requires_absent` — conjunction guard
+#### `requires_absent` — conjunction guard (v0.3.1; v0.4.1 view fix)
 
 A regex pattern. If set, the rule fires only when the main `pattern` matches AND the `requires_absent` regex does NOT match the guard view. Used to express "this is a violation UNLESS a guard directive is present" — for example, R12 fires on `Connect-CrmOnlineDiscovery` only when neither `#Requires -Version 5.1` nor `#Requires -PSEdition Desktop` is in the file.
 
@@ -385,6 +420,28 @@ Block comments do not nest in PowerShell (per about_Comments: "you can't nest bl
   "pattern": "Connect-CrmOnlineDiscovery|Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell",
   "requires_absent": "^#Requires\\s+(?:-Version\\s+5\\.1|-PSEdition\\s+Desktop)",
   "message": "These modules hang in pwsh. Ensure script has #Requires -Version 5.1 or #Requires -PSEdition Desktop ...",
+  "severity": "ERROR",
+  "enabled": true
+}
+```
+
+#### `requires_present` — conjunction precondition (v0.4.2)
+
+Mirror of `requires_absent` but inverted semantically. A regex pattern. If set, the rule applies only when the `requires_present` regex DOES match the targetContent view. If it does not match, the rule is skipped entirely — no fire, regardless of any other condition.
+
+Used to express "this rule applies only when the file actually does the thing being guarded." For `regex-inverse` rules in particular, this closes the false-positive shape where a rule fires on any file that lacks the inverse pattern — even files that have nothing for the rule to guard.
+
+The check uses `targetContent`, which is the same content view the main rule pattern uses (`noCommentNoStringContent` for `regex-inverse`, `strippedContent` for most `regex` and `regex-template` rules). This is consistent with the bypass-prevention semantics of `regex-inverse`: a mutation-shaped string inside a comment or string literal does not force a `regex-inverse` rule to apply.
+
+R28 is the seeded use case: the rule applies only when the file contains a Dataverse Web API mutation call (`Invoke-RestMethod` or `Invoke-WebRequest` with `-Method POST`/`PATCH`/`PUT`). A `pwsh -Command "Get-Date"` snippet no longer false-positives.
+
+```json
+{
+  "id": "R28",
+  "type": "regex-inverse",
+  "pattern": "if\\s*\\(\\$null\\s*-eq",
+  "requires_present": "(?:Invoke-RestMethod|Invoke-WebRequest)[^\\n]*-Method\\s+[\"']?(?:POST|Post|post|PATCH|Patch|patch|PUT|Put|put)[\"']?",
+  "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded.",
   "severity": "ERROR",
   "enabled": true
 }
@@ -535,7 +592,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **64 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; and the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the round-2 SHOWSTOPPER fix and its regression anchors.
+- **71 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the round-2 SHOWSTOPPER fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard) that pin the `requires_present` precondition closing the v0.4.0 round-1 known limitation; and the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the round-3 fix.
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.

@@ -812,6 +812,119 @@ const probes = [
         mustNotFire: [],
         expectClean: false,
         exactFireCount: { 'R25': 1 }
+    },
+
+    // =========================================================================
+    // v0.4.2 R28 conjunction-aware refinement (requires_present)
+    // R28 (regex-inverse, "if ($null -eq" missing) now applies only when
+    // the file actually contains a Dataverse Web API mutation call
+    // (Invoke-RestMethod / Invoke-WebRequest with -Method POST/PATCH/PUT).
+    // Prior to v0.4.2 a single-line `pwsh -Command "Get-Date"` snippet
+    // tripped R28 because it had no inverse-pattern match -- a known
+    // round-1 limitation documented during the v0.4.0 review.
+    //
+    // Substrate citations for the mutation-method list:
+    //   - https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
+    //     "Send a `POST` request to the Web API entityset resource to
+    //      create a table row (entity record) in Microsoft Dataverse."
+    //   - https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/update-delete-entities-using-web-api
+    //     "Update operations use the HTTP `PATCH` verb."
+    //     "To update a single property value, use a `PUT` request and add
+    //      the property name to the entity's Uri."
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R28-no-mutation-no-guard.ps1'),
+        label: 'probe-R28-no-mutation-no-guard',
+        // Single-line snippet with neither mutation call nor guard. Pre-v0.4.2:
+        // R28 would fire (false positive on a benign snippet). v0.4.2:
+        // requires_present skips the rule entirely. R28 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R28'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-post-no-guard.ps1'),
+        label: 'probe-R28-post-no-guard',
+        // True positive: POST mutation present, no guard. Canonical R28 case.
+        // R28 MUST fire.
+        mustFire: ['R28'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-post-with-guard.ps1'),
+        label: 'probe-R28-post-with-guard',
+        // True negative anchor: POST mutation present AND guard present.
+        // Legitimate guarded code. R28 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R28'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-get-only-no-guard.ps1'),
+        label: 'probe-R28-get-only-no-guard',
+        // Read-only path: -Method Get is not a mutation. requires_present
+        // does not match, R28 does not apply. R28 MUST NOT fire.
+        // Probe also assigns to `$response` at script scope, which fires R25
+        // (an unrelated, expected violation). Hence expectClean: false but
+        // R28 specifically must not fire.
+        mustFire: [],
+        mustNotFire: ['R28'],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-patch-no-guard.ps1'),
+        label: 'probe-R28-patch-no-guard',
+        // True positive: PATCH mutation present, no guard. PATCH is a
+        // Dataverse Web API mutation per substrate. R28 MUST fire.
+        mustFire: ['R28'],
+        mustNotFire: [],
+        expectClean: false
+    },
+
+    // =========================================================================
+    // v0.4.2 module-env-mismatch block-comment guard fix
+    // Round-3 reviewer of PR #3 surfaced this as a follow-up nit: the
+    // module-env-mismatch directive presence check ran against rawContent,
+    // so a `#Requires -PSEdition Desktop` lexeme nested inside a `<# ... #>`
+    // block comment falsely satisfied the guard. PowerShell does not honor
+    // block-comment-internal `#Requires` directives at parse time
+    // (per about_Requires: "Each `#Requires` statement must be the first
+    // item on a line"; per about_Comments: text inside `<# ... #>` is
+    // comment content). v0.4.2 changes the directive presence check to run
+    // against rawContentNoBlockComments, mirroring the v0.4.1 R12 fix on
+    // the requires_absent path.
+    //
+    // Substrate citations:
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comments
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_requires
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-module-env-block-comment-requires.ps1'),
+        label: 'probe-module-env-block-comment-requires',
+        // Round-3 reviewer reproduction: `<# #Requires -PSEdition Desktop #>`
+        // followed by Import-Module Microsoft.Xrm.Tooling.CrmConnector.PowerShell.
+        // PS does not honor the block-comment-internal directive at parse
+        // time. module-env-mismatch MUST fire. Pins the v0.4.2 fix.
+        // R12 also fires (its requires_absent path was already correct in
+        // v0.4.1; the comment-internal lexeme is also rejected there).
+        mustFire: ['module-env-mismatch', 'R12'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-module-env-line-comment-still-works.ps1'),
+        label: 'probe-module-env-line-comment-still-works',
+        // Regression anchor: canonical line-comment `#Requires -PSEdition
+        // Desktop` at column 0. PS honors this; the directive presence
+        // check must keep it visible after the rawContent ->
+        // rawContentNoBlockComments change. module-env-mismatch MUST NOT
+        // fire. Pins line-comment directive recognition so future widening
+        // of stripBlockComments cannot regress it. R12 also MUST NOT fire
+        // (its guard accepts -PSEdition Desktop).
+        mustFire: [],
+        mustNotFire: ['module-env-mismatch', 'R12'],
+        expectClean: true
     }
 ];
 
