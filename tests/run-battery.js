@@ -57,8 +57,10 @@ console.log("Running Fail Battery...");
         console.error("Fail Battery FAILED. Expected linter to catch violations (exit 1).");
         overallPass = false;
     } else {
+        // R16 removed: rule deleted by design (does not catch a real failure mode).
+        // R21, R24, R28 promoted to ERROR (severity change only; still fire).
         const expectedRules = [
-            'R07', 'R12', 'R13', 'R16', 'R18', 'R21', 'R24', 'R25', 'R26', 'R28',
+            'R07', 'R12', 'R13', 'R18', 'R21', 'R24', 'R25', 'R26', 'R28',
             'extractor-json-error', 'odata-bind-guid', 'optionset-coverage', 'system-entity-cascade'
         ];
 
@@ -77,7 +79,11 @@ console.log("Running Fail Battery...");
             overallPass = false;
         } else {
             // Assert no unexpected rule IDs fired.
-            const knownValidRules = [...expectedRules, 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch'];
+            const knownValidRules = [
+                ...expectedRules,
+                'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch',
+                'R32', 'R33', 'R34', 'R35', 'R36'
+            ];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
             if (unexpected.length > 0) {
@@ -107,20 +113,20 @@ const probes = [
     {
         file: path.join(__dirname, 'probe-comment-bypass.ps1'),
         label: 'probe-comment-bypass',
-        // The probe was originally written to document a bypass defect when using only
-        // strippedContent for regex-inverse rules. The defect is now fixed: regex-inverse
-        // rules use noCommentNoStringContent, so comment-hidden bypass text does not satisfy
-        // them. R16 and R28 correctly fire (the script has no real Start-Transcript or guard).
-        mustFire: ['R16', 'R28'],
+        // R16 was deleted (does not catch a real failure mode; ERROR-or-delete principle).
+        // R28 still fires: the script has no real idempotency guard, and comment-bypass
+        // text cannot satisfy the noCommentNoStringContent check for regex-inverse rules.
+        mustFire: ['R28'],
         mustNotFire: [],
         expectClean: false
     },
     {
         file: path.join(__dirname, 'probe-comment-bypass-trailing.ps1'),
         label: 'probe-comment-bypass-trailing',
-        // Same as probe-comment-bypass: trailing/block/string bypass shapes are also handled
-        // by noCommentNoStringContent. R16 and R28 correctly fire.
-        mustFire: ['R16', 'R28'],
+        // R16 was deleted. R28 fires because trailing-comment, block-comment, and
+        // string-literal bypass shapes for if ($null -eq) are rejected by noCommentNoStringContent.
+        // R28 is now ERROR (promoted from WARN).
+        mustFire: ['R28'],
         mustNotFire: [],
         expectClean: false
     },
@@ -267,6 +273,338 @@ const probes = [
         // R12 still fires unconditionally; expectClean false.
         mustFire: [],
         mustNotFire: ['module-env-mismatch'],
+        expectClean: false
+    },
+
+    // =========================================================================
+    // R32 — Connect-PnPOnline -TenantId (wrong parameter name)
+    // Citation: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R32-basic-trigger.ps1'),
+        label: 'probe-R32-basic-trigger',
+        // Minimal trigger: Connect-PnPOnline -TenantId on one line.
+        // -TenantId is not a parameter on Connect-PnPOnline; -Tenant is.
+        // R32 MUST fire.
+        mustFire: ['R32'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R32-correct-tenant.ps1'),
+        label: 'probe-R32-correct-tenant',
+        // Clean path: Connect-PnPOnline with -Tenant (correct param). R32 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R32'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R32-singlequote-arg.ps1'),
+        label: 'probe-R32-singlequote-arg',
+        // Trigger probe with single-quoted args between Connect-PnPOnline and -TenantId.
+        // PnP examples idiomatically use single-quoted strings; the original [^'\n]* pattern
+        // terminated at the first single quote and missed this case. The widened [^\n]*
+        // pattern catches it. R32 MUST fire.
+        mustFire: ['R32'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R32-tenantid-inline-comment.ps1'),
+        label: 'probe-R32-tenantid-inline-comment',
+        // DOCUMENTED FALSE POSITIVE: -TenantId appears in a trailing inline comment on
+        // the same line as a correct Connect-PnPOnline call. The pattern [^\n]* spans
+        // through the comment before the newline. R32 fires even though the code is correct.
+        // This probe anchors the known limitation as a regression anchor.
+        // EXPECTED: R32 fires (false positive accepted in exchange for catching the
+        // single-quoted-arg case via [^\n]* widening).
+        mustFire: ['R32'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R32-different-cmdlet-tenantid.ps1'),
+        label: 'probe-R32-different-cmdlet-tenantid',
+        // Connect-AzAccount -TenantId is legitimate (Azure cmdlets use -TenantId).
+        // R32 anchors on Connect-PnPOnline. R32 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R32'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R32-multiline-backtick.ps1'),
+        label: 'probe-R32-multiline-backtick',
+        // DOCUMENTED FALSE NEGATIVE: -TenantId on the next line after a backtick continuation.
+        // The pattern stops at \n so the continuation line is not captured.
+        // R32 does NOT fire (known false negative for backtick-continuation form).
+        mustFire: [],
+        mustNotFire: ['R32'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R32-case-insensitive-miss.ps1'),
+        label: 'probe-R32-case-insensitive-miss',
+        // DOCUMENTED FALSE NEGATIVE: CONNECT-PNPONLINE -TENANTID (all uppercase).
+        // The R32 regex uses "gm" flags (no 'i'). PowerShell is case-insensitive but
+        // the linter regex is not. Uppercase cmdlet + param bypasses detection.
+        // R32 does NOT fire (known false negative for uppercase variants).
+        mustFire: [],
+        mustNotFire: ['R32'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R33 — Publish-PnPPage does not exist in PnP.PowerShell 3.x
+    // Citation: https://pnp.github.io/powershell/cmdlets/Set-PnPPage.html
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R33-basic-trigger.ps1'),
+        label: 'probe-R33-basic-trigger',
+        // Minimal trigger: Publish-PnPPage -Identity "Home.aspx".
+        // Replacement: Set-PnPPage -Identity <name> -Publish. R33 MUST fire.
+        mustFire: ['R33'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R33-set-pnppage-correct.ps1'),
+        label: 'probe-R33-set-pnppage-correct',
+        // Clean path: uses Set-PnPPage -Publish (documented 3.x replacement).
+        // R33 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R33'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R33-in-comment.ps1'),
+        label: 'probe-R33-in-comment',
+        // Publish-PnPPage appears only on a full-line # comment.
+        // strippedContent strips full-line comments; R33 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R33'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R33-publish-other-cmdlet.ps1'),
+        label: 'probe-R33-publish-other-cmdlet',
+        // Publish-PnPFile (a different cmdlet). Word-boundary \b prevents partial matches.
+        // R33 MUST NOT fire on Publish-PnPFile.
+        mustFire: [],
+        mustNotFire: ['R33'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R33-inline-comment-false-positive.ps1'),
+        label: 'probe-R33-inline-comment-false-positive',
+        // DOCUMENTED FALSE POSITIVE: Publish-PnPPage in a trailing inline comment after
+        // correct code. strippedContent retains inline comments so R33 fires on comment text.
+        // EXPECTED: R33 fires (false positive; inline comments not stripped by strippedContent).
+        mustFire: ['R33'],
+        mustNotFire: [],
+        expectClean: false
+    },
+
+    // =========================================================================
+    // R34 — pac install is not a valid pac command group
+    // Citation: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R34-basic-trigger.ps1'),
+        label: 'probe-R34-basic-trigger',
+        // "pac install latest" — a common hallucination. pac has no "install" command group.
+        // R34 MUST fire.
+        mustFire: ['R34'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R34-application-install.ps1'),
+        label: 'probe-R34-application-install',
+        // "pac application install" is correct. "application" separates pac from install
+        // so \bpac\s+install\b does not match. R34 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R34'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R34-pac-solution-install.ps1'),
+        label: 'probe-R34-pac-solution-install',
+        // "pac solution import" has no "install" word. R34 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R34'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R34-install-in-string.ps1'),
+        label: 'probe-R34-install-in-string',
+        // DOCUMENTED FALSE POSITIVE: "pac install" inside a Write-Host string literal.
+        // strippedContent does not strip string content, so R34 fires on the string.
+        // EXPECTED: R34 fires (false positive; strings not stripped from strippedContent).
+        mustFire: ['R34'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R34-pac-install-module.ps1'),
+        label: 'probe-R34-pac-install-module',
+        // Install-Module has no "pac" prefix. \bpac\s+install\b requires "pac" before "install".
+        // R34 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R34'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R34-in-comment.ps1'),
+        label: 'probe-R34-in-comment',
+        // "pac install" on a full-line # comment. strippedContent strips full-line comments.
+        // R34 MUST NOT fire when "pac install" is only in a comment.
+        mustFire: [],
+        mustNotFire: ['R34'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R35 — [Parser]::ParseFile with both output args as [ref]$null
+    // Citation: https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.language.parser.parsefile
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R35-basic-trigger.ps1'),
+        label: 'probe-R35-basic-trigger',
+        // ParseFile($p, [ref]$null, [ref]$null): both output parameters discarded.
+        // Caller cannot inspect tokens or parse errors. R35 MUST fire.
+        mustFire: ['R35'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R35-bound-variables.ps1'),
+        label: 'probe-R35-bound-variables',
+        // ParseFile with real $tokens and $errs variables (correct usage). R35 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R35'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R35-one-null-arg.ps1'),
+        label: 'probe-R35-one-null-arg',
+        // DOCUMENTED SCOPE LIMIT: only the tokens arg is [ref]$null; errors are captured.
+        // R35 flags only when BOTH args are [ref]$null. Single-null is out of scope.
+        // R35 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R35'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R35-whitespace-variants.ps1'),
+        label: 'probe-R35-whitespace-variants',
+        // Extra spaces around [ref]$null in the argument list. The pattern handles \s*.
+        // R35 MUST fire even with extra whitespace.
+        mustFire: ['R35'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R35-parsestring-not-parsefile.ps1'),
+        label: 'probe-R35-parsestring-not-parsefile',
+        // [Parser]::ParseInput (different method). R35 anchors on "ParseFile".
+        // R35 MUST NOT fire on ParseInput.
+        mustFire: [],
+        mustNotFire: ['R35'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R36 — [datetime]::TryParse($s, [ref]$null) overload-resolution hazard
+    // Citation: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R36-basic-trigger.ps1'),
+        label: 'probe-R36-basic-trigger',
+        // [datetime]::TryParse($s, [ref]$null): 2-arg form with discarded output.
+        // Parsed DateTime unreachable; .NET 7+ may resolve wrong overload. R36 MUST fire.
+        mustFire: ['R36'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R36-as-operator.ps1'),
+        label: 'probe-R36-as-operator',
+        // $result = $s -as [datetime]: recommended replacement. R36 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R36'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R36-three-arg-form.ps1'),
+        label: 'probe-R36-three-arg-form',
+        // TryParse($s, $provider, [ref]$parsed): 3-arg form. Second arg is a real
+        // $provider variable, not [ref]$null. R36 scope is 2-arg only. R36 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R36'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R36-bound-output-var.ps1'),
+        label: 'probe-R36-bound-output-var',
+        // [datetime]::TryParse($s, [ref]$parsedDate): 2-arg form with a real bound variable.
+        // The correct usage. R36 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R36'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R36-tryparse-other-type.ps1'),
+        label: 'probe-R36-tryparse-other-type',
+        // [int]::TryParse($s, [ref]$null): different type. R36 anchors on [datetime].
+        // R36 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R36'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R36-capitalized-type.ps1'),
+        label: 'probe-R36-capitalized-type',
+        // DOCUMENTED FALSE NEGATIVE: [DateTime]::TryParse (capital D).
+        // The R36 pattern uses lowercase \[datetime\]; case-sensitive regex ("gm" flags, no 'i').
+        // PowerShell type accelerators are case-insensitive, so [DateTime] is identical at
+        // runtime, but the linter misses it. R36 does NOT fire (known false negative).
+        mustFire: [],
+        mustNotFire: ['R36'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // module-env-mismatch — Microsoft.Xrm.Data.PowerShell (new entry)
+    // Citations: https://github.com/seanmcne/Microsoft.Xrm.Data.PowerShell
+    //            https://learn.microsoft.com/en-us/power-apps/developer/data-platform/xrm-tooling/use-powershell-cmdlets-xrm-tooling-connect
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-module-env-xrmdata-missing.ps1'),
+        label: 'probe-module-env-xrmdata-missing',
+        // Import-Module Microsoft.Xrm.Data.PowerShell without #Requires -PSEdition Desktop.
+        // Desktop-only module; pwsh 7 silently exits at import. module-env-mismatch MUST fire.
+        mustFire: ['module-env-mismatch'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-module-env-xrmdata-ok.ps1'),
+        label: 'probe-module-env-xrmdata-ok',
+        // Same import WITH #Requires -PSEdition Desktop (correct usage).
+        // module-env-mismatch MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['module-env-mismatch'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-module-env-xrmdata-name-form.ps1'),
+        label: 'probe-module-env-xrmdata-name-form',
+        // Trigger probe with the explicit `Import-Module -Name <module>` form, missing
+        // #Requires -PSEdition Desktop. The original import_pattern only matched
+        // `Import-Module Microsoft.Xrm.Data.PowerShell` (no -Name); the widened
+        // pattern accepts both forms. module-env-mismatch MUST fire.
+        mustFire: ['module-env-mismatch'],
+        mustNotFire: [],
         expectClean: false
     }
 ];
