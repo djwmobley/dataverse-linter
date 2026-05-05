@@ -34,7 +34,7 @@ Wire-up in `~/.claude/settings.json`:
 
 ### 2. Stop — `hooks/stop-lint-chat.js`
 
-Triggered when Claude Code is about to stop (end a turn). Reads the transcript JSONL at `payload.transcript_path`, finds the last assistant turn, regex-extracts every ` ```powershell `, ` ```pwsh `, and ` ```ps1 ` fenced block, writes each to a temp `.ps1` file, and lints it. Non-PS fenced blocks (`bash`, `js`, etc.) and plain prose pass through silently. Temp files are deleted after each lint run.
+Triggered when Claude Code is about to stop (end a turn). Reads the transcript JSONL at `payload.transcript_path`, finds the last assistant turn, regex-extracts every fenced block whose language tag matches (case-insensitive) `powershell`, `pwsh`, `ps1`, or `posh`, writes each block to a temp `.ps1` file, and lints it. The fence regex accepts both column-0 fences and fences that follow inline prose on the same line (e.g., `Run this: ```powershell`). Generic `shell` and no-label fences are intentionally excluded. Non-PS fenced blocks (`bash`, `js`, etc.) and plain prose pass through silently. Temp files are deleted after each lint run.
 
 Payload contract (`Stop`, documented at https://code.claude.com/docs/en/hooks):
 ```json
@@ -53,15 +53,23 @@ Wire-up in `~/.claude/settings.json`:
 ### 3. PreToolUse (Bash) — `hooks/pretool-lint-bash.js`
 
 Triggered before every `Bash` tool call. Inspects `tool_input.command` and extracts inline PowerShell from these forms:
-- `pwsh -Command "..."` / `pwsh -c "..."`
-- `powershell -Command "..."` / `powershell -c "..."`
-- `pwsh.exe -Command "..."`
-- `pwsh << 'WORD' ... WORD` (heredoc piped to pwsh)
-- `cat << 'WORD' ... WORD | pwsh` (piped heredoc)
+- `pwsh -Command "..."` / `pwsh -c "..."` (double-quoted body)
+- `pwsh -Command '...'` / `pwsh -c '...'` (single-quoted body)
+- `powershell -Command "..."` / `powershell.exe -Command "..."`
+- `pwsh -EncodedCommand <base64>` / `pwsh -enc <base64>` (UTF-16LE per Microsoft contract; round-trip-decoded and linted)
+- `pwsh << 'WORD' ... WORD` (heredoc directly to pwsh)
+- `<body> WORD | pwsh` (heredoc with pipe on the closing line)
+- `cat << 'WORD' | pwsh\n<body>\nWORD` (heredoc with pipe on the opening line)
+- `echo "<lit>" | pwsh` / `printf "..." | pwsh` (literal stdin pipe; body lifted)
+- `sh -c "$(...)"` / `bash -c "$(...)"` (subshell substitution; recursively scanned, depth cap 3)
 
-Pure file invocations (`powershell -File path.ps1` or `pwsh -File path.ps1`) pass through unaltered -- the file itself was linted at write time by the PostToolUse hook.
+Mixed shapes (e.g., `pwsh -File ok.ps1; pwsh -Command "<inline>"`) extract and lint the inline portion. The `-File path.ps1` portion was linted at write time by the PostToolUse hook.
+
+Known limitation -- `cat <file> | pwsh`: the hook cannot read arbitrary files at hook time, so this shape is detected and refused (exit 2) with a stderr message asking the author to inline the body via `pwsh -Command` or write the file via Write/Edit (which routes through the PostToolUse linter gate).
 
 Non-Bash tool calls and Bash commands without inline PS pass through silently.
+
+EncodedCommand decoding contract: per [about_PowerShell_exe](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe), "Accepts a base-64-encoded string version of a command. ... The string must be formatted using UTF-16LE character encoding." The hook decodes via `Buffer.from(b64, 'base64').toString('utf16le')`, which is round-trip-equivalent to PowerShell's `[System.Text.Encoding]::Unicode.GetBytes()` encoder. Malformed b64 is detect-and-block.
 
 Payload contract (`PreToolUse`, documented at https://code.claude.com/docs/en/hooks):
 ```json

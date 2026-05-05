@@ -44,9 +44,21 @@ const path = require('path');
 const LINTER_ROOT = path.resolve(__dirname, '..');
 const LINTER_ENTRY = path.join(LINTER_ROOT, 'src', 'index.js');
 
-// Fenced block extraction: captures ```powershell, ```pwsh, ```ps1 (case-insensitive).
-// Uses a non-greedy match so adjacent blocks do not merge.
-const FENCED_PS_RE = /^```(?:powershell|pwsh|ps1)\r?\n([\s\S]*?)^```/gim;
+// Fenced block extraction.
+// Round-1 review (PR #2) widening:
+//   - Leading anchor relaxed from `^` to `(?:^|\n|\s)` so an inline-prose
+//     lead-in like "Run this: ```powershell\n...\n```" is captured. The
+//     previous strict `^` only matched fences that began at column 0, which
+//     allowed an assistant to bypass by placing inline prose before the fence
+//     on the same line.
+//   - Language-tag set widened to (powershell|pwsh|ps1|posh), case-insensitive
+//     ("PowerShell", "PWSH", "POSH" all match). Generic `shell` and no-label
+//     fences are intentionally excluded to avoid over-matching legitimate
+//     non-PS code blocks.
+// Closing fence is matched by `\n``` ` at the start of a new line (anchored
+// by the preceding newline) with non-greedy body capture so adjacent blocks
+// do not merge.
+const FENCED_PS_RE = /(?:^|\n|\s)```(?:powershell|pwsh|ps1|posh)\r?\n([\s\S]*?)\n```/gi;
 
 function extractFencedPsBlocks(text) {
     const blocks = [];

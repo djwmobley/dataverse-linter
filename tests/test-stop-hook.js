@@ -155,5 +155,102 @@ console.log('\nSTOP-8: Non-existent transcript_path...');
     assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode);
 }
 
+// ===========================================================================
+// Round-1 review (PR #2) bypass-closure probes -- Stop hook side
+// ===========================================================================
+
+// Reusable bodies.
+const BAD_PS_BODY = '$optionSets = @("x")\npac install latest\nInvoke-RestMethod -Method POST -Uri "https://org.crm.dynamics.com/api/data/v9.2/entities"\n';
+const CLEAN_PS_BODY = '#Requires -PSEdition Desktop\n$optionSets = @("adv_Status")\nStart-Transcript -Path "C:\\\\Temp\\\\log.txt"\n$existing = $null\nif ($null -eq $existing) { Write-Host "ok" }\nStop-Transcript\n';
+
+// ---------------------------------------------------------------------------
+// Closure 4 (MINOR): inline-prose lead-in fence in chat
+// Pre-fix: FENCED_PS_RE anchored with `^...^` (multiline), so a fence after
+// inline prose on the same line ("Run this: ```powershell\n...") was missed.
+// Fix: leading anchor relaxed from `^` to `(?:^|\n|\s)`.
+// ---------------------------------------------------------------------------
+console.log('\n[inline-colon-fence-bad]: "Run this: ```powershell\\n<bad>\\n```"...');
+{
+    const txt = 'Run this: ' + B3 + 'powershell\n' + BAD_PS_BODY + B3 + '\nDone.';
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode);
+        assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/stop]'), r.stderr.slice(0, 200));
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+console.log('\n[inline-colon-fence-clean]: "Run this: ```powershell\\n<clean>\\n```" (true negative)...');
+{
+    const txt = 'Run this: ' + B3 + 'powershell\n' + CLEAN_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// Closure 8 (out-of-scope-widened): fence language-tag widening
+// Pre-fix: lowercase only (`powershell|pwsh|ps1`). Realistic chat shapes
+// include `PowerShell`, `PWSH`, and `POSH` (all valid).
+// Fix: regex flag `i` + tag set widened to (powershell|pwsh|ps1|posh).
+// ---------------------------------------------------------------------------
+console.log('\n[case-insensitive-fence-bad-PowerShell]: ```PowerShell (capital P)...');
+{
+    const txt = 'Use:\n' + B3 + 'PowerShell\n' + BAD_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode);
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+console.log('\n[case-insensitive-fence-bad-PWSH]: ```PWSH (all caps)...');
+{
+    const txt = 'Use:\n' + B3 + 'PWSH\n' + BAD_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode);
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+console.log('\n[case-insensitive-fence-bad-POSH]: ```POSH (synonym, all caps)...');
+{
+    const txt = 'Use:\n' + B3 + 'POSH\n' + BAD_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode);
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+console.log('\n[case-insensitive-fence-bad-mixed-posh]: ```Posh (lowercase synonym)...');
+{
+    const txt = 'Use:\n' + B3 + 'Posh\n' + BAD_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode);
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+console.log('\n[case-insensitive-fence-clean-PowerShell]: ```PowerShell + clean body (true negative)...');
+{
+    const txt = 'Use:\n' + B3 + 'PowerShell\n' + CLEAN_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+console.log('\n[fence-shell-not-matched]: ```shell (generic) bad body must NOT trigger PS lint...');
+{
+    // Generic `shell` is intentionally NOT in the language-tag set; the hook
+    // must not lint it as PS even if the body looks like PS. Pass-through (exit 0).
+    const txt = 'Shell:\n' + B3 + 'shell\n' + BAD_PS_BODY + B3;
+    const tp = makeTranscript(txt);
+    try {
+        const r = runHook(mkpayload(tp));
+        assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    } finally { try { fs.unlinkSync(tp); } catch (_) {} }
+}
+
 console.log('\nStop hook probes: ' + passed + ' passed, ' + failed + ' failed');
 if (failed > 0) process.exit(1);

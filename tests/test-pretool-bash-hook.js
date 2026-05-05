@@ -147,5 +147,169 @@ console.log('\nBASH-8: tool_name is Write (not Bash)...');
     assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode);
 }
 
+// ===========================================================================
+// Round-1 review (PR #2) bypass-closure probes
+// All closures below were APPROVE-CONDITIONAL findings + reviewer-flagged
+// out-of-scope evasions widened in scope per Damian directive 2026-05-05.
+// ===========================================================================
+
+// Reusable PS bodies.
+// Bad body: triggers R12 (Connect-CrmOnlineDiscovery) and R31 (-ShowProgress).
+const BAD_PS_INLINE = 'Connect-CrmOnlineDiscovery -InteractiveMode -ShowProgress $false';
+// Double-quoted -Command bodies need $-escaping for bash.
+const BAD_PS_INLINE_DQ_ESC = 'Connect-CrmOnlineDiscovery -InteractiveMode -ShowProgress \\$false';
+// Clean body satisfies R28 (idempotency guard) and has no banned patterns.
+const CLEAN_PS_INLINE_DQ = '$optionSets = @(\\"adv_Status\\"); Start-Transcript -Path \\"C:\\\\\\\\Temp\\\\\\\\log.txt\\"; $existing = $null; if ($null -eq $existing) { Write-Host \\"ok\\" }; Stop-Transcript';
+// Single-quoted variant (no \\ escaping inside ' ').
+const CLEAN_PS_SQ = '$optionSets = @("adv_Status"); Start-Transcript -Path "C:\\\\Temp\\\\log.txt"; $existing = $null; if ($null -eq $existing) { Write-Host "ok" }; Stop-Transcript';
+// Multi-line clean body for heredoc tests.
+const CLEAN_PS_MULTILINE = '#Requires -PSEdition Desktop\n$optionSets = @("adv_Status")\nStart-Transcript -Path "C:\\\\Temp\\\\log.txt"\n$existing = $null\nif ($null -eq $existing) { Write-Host "ok" }\nStop-Transcript';
+// Multi-line bad body for heredoc tests (R34 + R28).
+const BAD_PS_MULTILINE = '$optionSets = @("x")\npac install latest\nInvoke-RestMethod -Method POST -Uri "https://org.crm.dynamics.com/api/data/v9.2/entities"';
+
+// ---------------------------------------------------------------------------
+// Closure 1 (MAJOR): file-invocation early-return short-circuit
+// Bypass: pwsh -File ok.ps1; pwsh -Command "<bad>"
+// Pre-fix: FILE_INVOCATION_RE matched, function returned early, inline body
+// never extracted -> exit 0. Fix: drop the early return entirely.
+// ---------------------------------------------------------------------------
+console.log('\n[file-then-inline-bad]: pwsh -File ok.ps1; pwsh -Command "<bad>"...');
+{
+    const cmd = 'pwsh -File C:/scripts/ok.ps1; pwsh -Command "' + BAD_PS_INLINE_DQ_ESC + '"';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/pretool-bash]'), r.stderr.slice(0, 200));
+}
+console.log('\n[file-then-inline-clean]: pwsh -File ok.ps1; pwsh -Command "<clean>" (true negative)...');
+{
+    const cmd = 'pwsh -File C:/scripts/ok.ps1; pwsh -Command "' + CLEAN_PS_INLINE_DQ + '"';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+
+// ---------------------------------------------------------------------------
+// Closure 2 (MAJOR): pwsh -EncodedCommand <base64> not extracted
+// Citation: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+// Verbatim: "Accepts a base-64-encoded string version of a command. ... The
+// string must be formatted using UTF-16LE character encoding."
+// Round-trip verified 2026-05-05: PS [System.Text.Encoding]::Unicode <==> Node 'utf16le'.
+// ---------------------------------------------------------------------------
+console.log('\n[encoded-command-bad]: pwsh -EncodedCommand <b64-of-bad-ps>...');
+{
+    const b64 = Buffer.from(BAD_PS_INLINE, 'utf16le').toString('base64');
+    const cmd = 'pwsh -NoProfile -EncodedCommand ' + b64;
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/pretool-bash]'), r.stderr.slice(0, 200));
+}
+console.log('\n[encoded-command-clean]: pwsh -EncodedCommand <b64-of-clean-ps> (true negative)...');
+{
+    const cleanBody = '$optionSets = @("adv_Status"); Start-Transcript -Path "C:\\Temp\\log.txt"; $existing = $null; if ($null -eq $existing) { Write-Host "ok" }; Stop-Transcript';
+    const b64 = Buffer.from(cleanBody, 'utf16le').toString('base64');
+    const cmd = 'pwsh -EncodedCommand ' + b64;
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+console.log('\n[encoded-command-shortform-enc]: pwsh -enc <b64-of-bad-ps> (lowercase alias)...');
+{
+    const b64 = Buffer.from(BAD_PS_INLINE, 'utf16le').toString('base64');
+    const cmd = 'pwsh -enc ' + b64;
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+
+// ---------------------------------------------------------------------------
+// Closure 3 (MINOR): heredoc pipe-on-opening-line bypass
+// Pre-fix: PIPED_HEREDOC_RE only matched <body> EOF | pwsh (closing-line pipe).
+// Bash also supports cat << 'EOF' | pwsh\n<body>\nEOF (opening-line pipe);
+// the latter is the more common idiom in practice.
+// ---------------------------------------------------------------------------
+console.log('\n[heredoc-pipe-opening-bad]: cat << EOF | pwsh\\n<bad>\\nEOF...');
+{
+    const cmd = "cat << 'EOF' | pwsh\n" + BAD_PS_MULTILINE + "\nEOF";
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/pretool-bash]'), r.stderr.slice(0, 200));
+}
+console.log('\n[heredoc-pipe-opening-clean]: cat << EOF | pwsh\\n<clean>\\nEOF (true negative)...');
+{
+    const cmd = "cat << 'EOF' | pwsh\n" + CLEAN_PS_MULTILINE + "\nEOF";
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+
+// ---------------------------------------------------------------------------
+// Closure 5 (out-of-scope-widened): single-quoted -Command body
+// Pre-fix: INLINE_COMMAND_RE only matched double-quoted bodies.
+// Single quotes are an idiomatic bash form to embed PS without $-escaping.
+// ---------------------------------------------------------------------------
+console.log("\n[single-quoted-bad]: pwsh -Command '<bad>'...");
+{
+    const cmd = "pwsh -Command 'Connect-CrmOnlineDiscovery -InteractiveMode -ShowProgress $false'";
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/pretool-bash]'), r.stderr.slice(0, 200));
+}
+console.log("\n[single-quoted-clean]: pwsh -Command '<clean>' (true negative)...");
+{
+    const cmd = "pwsh -Command '" + CLEAN_PS_SQ + "'";
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+
+// ---------------------------------------------------------------------------
+// Closure 6 (out-of-scope-widened): subshell substitution sh -c "$(...)"
+// Pre-fix: not detected. Reviewer flagged as "complicit-author shape".
+// Recursion depth capped at 3 (constant SUBSHELL_MAX_DEPTH in hook).
+// ---------------------------------------------------------------------------
+console.log('\n[subshell-substitution-bad]: sh -c "$(echo pwsh -Command \'<bad>\')"...');
+{
+    const cmd = 'sh -c "$(echo pwsh -Command \'Connect-CrmOnlineDiscovery -InteractiveMode -ShowProgress $false\')"';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/pretool-bash]'), r.stderr.slice(0, 200));
+}
+console.log('\n[subshell-substitution-bash-bad]: bash -c "$(echo pwsh -Command \'<bad>\')"...');
+{
+    const cmd = 'bash -c "$(echo pwsh -Command \'Connect-CrmOnlineDiscovery -InteractiveMode -ShowProgress $false\')"';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+console.log('\n[subshell-substitution-clean]: sh -c "$(echo pwsh -Command \'<clean>\')" (true negative)...');
+{
+    const cmd = 'sh -c "$(echo pwsh -Command \'' + CLEAN_PS_SQ + '\')"';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+
+// ---------------------------------------------------------------------------
+// Closure 7 (out-of-scope-widened): stdin pipe to pwsh
+// Two sub-shapes:
+//   (a) echo "<lit>" | pwsh   -- literal lifted from echo, linted directly.
+//   (b) cat <file> | pwsh     -- file unreadable; refuse with warning + exit 2.
+// ---------------------------------------------------------------------------
+console.log('\n[stdin-pipe-echo-bad]: echo "<bad>" | pwsh...');
+{
+    const cmd = 'echo "Connect-CrmOnlineDiscovery -InteractiveMode -ShowProgress \\$false" | pwsh';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has linter marker', r.stderr.includes('[dataverse-linter/pretool-bash]'), r.stderr.slice(0, 200));
+}
+console.log('\n[stdin-pipe-echo-clean]: echo "<clean>" | pwsh (true negative)...');
+{
+    const cmd = 'echo "' + CLEAN_PS_INLINE_DQ + '" | pwsh';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 0', r.exitCode === 0, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+}
+console.log('\n[stdin-pipe-cat-warn-and-block]: cat foo.ps1 | pwsh -- refuse with warning...');
+{
+    const cmd = 'cat C:/secret/script.ps1 | pwsh';
+    const r = runHook(mkPayload(cmd));
+    assert('exit code is 2', r.exitCode === 2, 'got exit ' + r.exitCode + '; ' + r.stderr.slice(0, 300));
+    assert('stderr has refusal message',
+        r.stderr.includes('Refusing pipe-to-pwsh from external file source'),
+        r.stderr.slice(0, 400));
+}
+
 console.log('\nPreToolUse-Bash hook probes: ' + passed + ' passed, ' + failed + ' failed');
 if (failed > 0) process.exit(1);
