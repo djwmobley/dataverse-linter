@@ -82,7 +82,7 @@ console.log("Running Fail Battery...");
             const knownValidRules = [
                 ...expectedRules,
                 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch',
-                'R32', 'R33', 'R34', 'R35', 'R36'
+                'R32', 'R33', 'R34', 'R35', 'R36', 'R37'
             ];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
@@ -979,6 +979,98 @@ const probes = [
         mustFire: [],
         mustNotFire: ['module-env-mismatch', 'R12'],
         expectClean: true
+    },
+
+    // =========================================================================
+    // R37 — OData $filter on Lookup attribute uses bare logicalname (v0.4.3)
+    // The failure mode: appmodulecomponents?$filter=appmoduleidunique eq <guid>
+    // produces 0x80060888 "Could not find a property named 'appmoduleidunique'"
+    // because appmoduleidunique is Type=Lookup (not a filterable scalar property).
+    // The correct OData form for Lookup $filter equality is the underlying-value
+    // annotation: _<logicalname>_value eq <guid>.
+    //
+    // Implementation: regex-template with a hard-coded list of known Lookup
+    // logicalnames per entity. Seeded with 'appmoduleidunique' (the bug trigger).
+    // Extend via 'node src/rule-manager.js set-variables R37 <name1> <name2> ...'
+    //
+    // Substrate citations:
+    //   - appmodulecomponent entity: appmoduleidunique Type=Lookup, Targets=appmodule
+    //     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
+    //   - OData Lookup filter pattern _<logicalname>_value:
+    //     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows
+    //     (section "Filter on lookup property": $filter=_owninguser_value eq <systemuserid value>)
+    //
+    // False-positive guardrails:
+    //   - PrimaryIdAttribute equality (appmodulecomponentid eq): NOT in watch list -> no fire
+    //   - $select=appmoduleidunique: pattern anchors on '$filter=...<name> eq', so $select is safe
+    //   - $expand=appmoduleid(...): navigation prop in $expand, no 'eq' following it
+    //   - _appmoduleidunique_value eq: leading '_' breaks \b before 'appmoduleidunique' -> no fire
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R37-P1-bare-filter.ps1'),
+        label: 'probe-R37-P1-bare-filter',
+        // Positive probe: exact bug reproduction.
+        // $filter=appmoduleidunique eq <guid> -- bare Lookup logicalname in $filter.
+        // Produces 0x80060888 at runtime. R37 MUST fire.
+        mustFire: ['R37'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-P2-combined-predicate.ps1'),
+        label: 'probe-R37-P2-combined-predicate',
+        // Positive probe: combined predicate.
+        // componenttype eq 62 and appmoduleidunique eq <guid>
+        // R37 must detect the Lookup term anywhere in the $filter expression.
+        // R37 MUST fire.
+        mustFire: ['R37'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N1-correct-value-form.ps1'),
+        label: 'probe-R37-N1-correct-value-form',
+        // Negative probe: already-correct form.
+        // _appmoduleidunique_value eq <guid> -- OData Lookup underlying-value annotation.
+        // The leading '_' causes the \b word boundary before 'appmoduleidunique' to fail
+        // (since '_' is a word char, no boundary between '_' and 'a'). R37 MUST NOT fire.
+        // This is the clean-path regression anchor.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N2-pk-equality.ps1'),
+        label: 'probe-R37-N2-pk-equality',
+        // Negative probe: PrimaryIdAttribute equality.
+        // appmodulecomponentid is Type=Uniqueidentifier (not a Lookup); it is the PK.
+        // Bare scalar PK equality in $filter is correct OData. 'appmodulecomponentid'
+        // is not in the R37 watch list. R37 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N3-select-not-filter.ps1'),
+        label: 'probe-R37-N3-select-not-filter',
+        // Negative probe: Lookup logicalname in $select, not $filter.
+        // $select=appmoduleidunique is a valid column selection. The R37 pattern
+        // anchors on '$filter=...<name> eq'; $select usage does not match.
+        // R37 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N4-expand-not-filter.ps1'),
+        label: 'probe-R37-N4-expand-not-filter',
+        // Negative probe: navigation property name in $expand.
+        // $expand=appmoduleid($select=name) uses the ReferencingEntityNavigationPropertyName
+        // 'appmoduleid' (not 'appmoduleidunique'). Neither name followed by ' eq' appears
+        // in a $filter clause. R37 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: false
     }
 ];
 
