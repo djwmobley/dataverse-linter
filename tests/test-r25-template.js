@@ -25,6 +25,7 @@ function buildExtraction(content) {
         rawContent: content,
         strippedContent: content,
         noCommentNoStringContent: content,
+        functionBodyRanges: [],
         filePath: "(synthetic)"
     };
 }

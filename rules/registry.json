@@ -22,6 +22,7 @@
       "response",
       "result"
     ],
+    "scope": "script-only",
     "message": "Unprefixed assignment at script scope shadows $script:. Use a different name.",
     "enabled": true
   },
@@ -40,7 +41,8 @@
     "severity": "ERROR",
     "type": "regex",
     "pattern": "Connect-CrmOnlineDiscovery|Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell",
-    "message": "These modules hang in pwsh. Ensure script has #Requires -Version 5.1 and runs under powershell.exe.",
+    "requires_absent": "^#Requires\\s+(?:-Version\\s+5\\.1\\b|-PSEdition\\s+Desktop\\b)",
+    "message": "These modules hang in pwsh. Ensure script has #Requires -Version 5.1 or #Requires -PSEdition Desktop and runs under powershell.exe.",
     "enabled": true
   },
   {
