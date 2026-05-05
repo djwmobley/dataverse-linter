@@ -88,7 +88,7 @@ function validate(extraction) {
         }
 
         // requires_present (v0.4.2): a precondition guard. The rule applies
-        // only when the requires_present regex matches the targetContent view.
+        // only when the requires_present regex matches normalizedContent.
         // Mirror semantics of requires_absent but inverted: if requires_present
         // is set and does NOT match, the rule is skipped entirely.
         //
@@ -103,14 +103,23 @@ function validate(extraction) {
         // Dataverse Web API mutation call (POST/PATCH/PUT per the create
         // and update-delete Web API substrate pages on MS Learn).
         //
-        // The check uses targetContent (the same view the main pattern uses),
-        // so a mutation-shaped string inside a comment or string literal does
-        // not force regex-inverse rules to apply -- consistent with the
-        // bypass-prevention semantics of regex-inverse.
+        // requires_present is INTENT detection, not bypass prevention.
+        // It uses normalizedContent (strippedContent with backtick line
+        // continuations collapsed) so that a mutation call with a quoted
+        // method literal (`-Method "POST"`) is correctly recognized --
+        // noCommentNoStringContent strips string contents, turning
+        // `-Method "POST"` into `-Method ""`, which does not match the
+        // method alternation and produces a silent false skip.
+        // Line comments are excluded from normalizedContent (they are
+        // stripped via strippedContent), so a mutation-shaped string inside
+        // a line comment does not force the rule to apply.
+        // Block comments are NOT stripped from this view; if a future use
+        // case demands block-comment exclusion for requires_present, switch
+        // to a normalized-rawContentNoBlockComments hybrid then.
         let requiresPresentSatisfied = true;
         if (rule.requires_present) {
             const presentRe = new RegExp(rule.requires_present, "m");
-            if (!presentRe.test(targetContent)) {
+            if (!presentRe.test(normalizedContent)) {
                 requiresPresentSatisfied = false;
             }
         }

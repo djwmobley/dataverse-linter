@@ -881,6 +881,45 @@ const probes = [
         mustNotFire: [],
         expectClean: false
     },
+    {
+        file: path.join(__dirname, 'probe-R28-put-no-guard.ps1'),
+        label: 'probe-R28-put-no-guard',
+        // True positive (extends conjunction coverage):
+        // Web API PUT mutation IS present (single-property update form),
+        // idempotency guard is absent. R28 MUST fire.
+        // Pins PUT as the third member of the mutation set (POST, PATCH, PUT).
+        mustFire: ['R28'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-delete-no-guard.ps1'),
+        label: 'probe-R28-delete-no-guard',
+        // True negative anchor (intentional-exclusion pin):
+        // DELETE call IS present, idempotency guard is absent.
+        // DELETE is INTENTIONALLY excluded from R28's requires_present:
+        // HTTP DELETE is idempotent by spec (RFC 9110 S9.3.5) -- a re-run
+        // returns 404, not a duplicate create. R28 MUST NOT fire.
+        // This probe anchors the exclusion so a future addition of DELETE
+        // to requires_present triggers a regression signal.
+        mustFire: [],
+        mustNotFire: ['R28'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-mixedcase-method-no-fire.ps1'),
+        label: 'probe-R28-mixedcase-method-no-fire',
+        // Case-sensitivity anchor:
+        // `-Method pOsT` is fully mixed-case, not in the requires_present
+        // alternation (POST|Post|post). The precondition does not match;
+        // R28 is skipped. PowerShell accepts pOsT at runtime but the
+        // linter does not detect it. This is the deliberate design; the
+        // probe exists so a future widening to (?i:...) forces conscious
+        // sign-off on broadening the conjunction. R28 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R28'],
+        expectClean: true
+    },
 
     // =========================================================================
     // v0.4.2 module-env-mismatch block-comment guard fix
