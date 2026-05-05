@@ -7,13 +7,14 @@ function stripComments(content) {
 
 /**
  * Produce a derivation of content with block comments, string literals, and inline
- * comments removed. Used exclusively for regex-inverse rules (R16, R28) so that
+ * comments removed. Used exclusively for regex-inverse rules (R28) so that
  * bypass text hidden in comments or strings cannot satisfy a pattern that should only
  * be satisfied by real executable code.
  *
  * Strip order (matters — each step removes text that could confuse the next):
  *   1. Excise here-string bodies (replace their interior with a placeholder so that
- *      content like Start-Transcript inside a @'...'@ literal can't satisfy R16).
+ *      bypass tokens like an idempotency-guard substring inside a @'...'@ literal
+ *      can't satisfy R28).
  *   2. Strip PowerShell block comments: <# ... #>
  *   3. Strip non-here-string double-quoted strings (supports backtick-escaped chars).
  *   4. Strip non-here-string single-quoted strings (supports '' for embedded quote).

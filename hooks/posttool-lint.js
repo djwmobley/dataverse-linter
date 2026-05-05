@@ -32,7 +32,11 @@ process.stdin.on('end', () => {
     try {
         payload = JSON.parse(raw);
     } catch (e) {
-        // Malformed payload - don't block tool flow.
+        // Malformed payload - don't block tool flow, but surface the failure
+        // to stderr so the operator sees that the hook ran and bailed (a
+        // silent skip would mask a real Claude Code hook contract change or
+        // a serializer bug).
+        process.stderr.write(`[dataverse-linter] hook payload was not valid JSON; skipping lint (${e.message})\n`);
         process.exit(0);
     }
 

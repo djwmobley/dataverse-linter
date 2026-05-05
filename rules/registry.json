@@ -114,7 +114,7 @@
     "title": "Connect-PnPOnline -TenantId is not a valid parameter",
     "severity": "ERROR",
     "type": "regex",
-    "pattern": "Connect-PnPOnline\\b[^'\\n]*-TenantId\\b",
+    "pattern": "Connect-PnPOnline\\b[^\\n]*-TenantId\\b",
     "message": "Connect-PnPOnline does not have a -TenantId parameter. The correct parameter is -Tenant (accepts a tenant name such as mycompany.onmicrosoft.com). This will fail at runtime with a parameter-binding error. See: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html",
     "enabled": true
   },

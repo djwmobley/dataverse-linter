@@ -139,7 +139,7 @@ Source: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html
 **Known limitations:**
 
 - **Case-sensitivity gap:** The regex is case-sensitive (`gm` flags, no `i`). A script using `connect-pnponline -tenantid` or `CONNECT-PNPONLINE -TENANTID` will not be caught. PowerShell cmdlets are case-insensitive at runtime but the linter regex is not. See `probe-R32-case-insensitive-miss.ps1`.
-- **Inline-comment false positive:** The pattern `[^'\n]*` spans across inline comments on the same line. A line like `Connect-PnPOnline -Url "..." # -TenantId removed` fires R32 even though the actual code is correct — `-TenantId` appears only in the comment. See `probe-R32-tenantid-inline-comment.ps1`.
+- **Inline-comment false positive:** The pattern `[^\n]*` spans across inline comments on the same line. A line like `Connect-PnPOnline -Url "..." # -TenantId removed` fires R32 even though the actual code is correct — `-TenantId` appears only in the comment. This false positive is the trade-off accepted in v0.3.x to catch the single-quoted-arg case (see `probe-R32-singlequote-arg.ps1`); the previous `[^'\n]*` pattern excluded single quotes and missed `Connect-PnPOnline -Url 'x' -TenantId 'y'`. See `probe-R32-tenantid-inline-comment.ps1`.
 - **Backtick-continuation false negative:** If `-TenantId` appears on the next line after a backtick continuation, the `\n` in the pattern terminates the match before reaching it. R32 will not fire on the continuation form. See `probe-R32-multiline-backtick.ps1`.
 
 ### R33 — `Publish-PnPPage` does not exist in PnP.PowerShell 3.x
@@ -197,6 +197,8 @@ Some PowerShell modules are incompatible with PowerShell Core (pwsh 7 / .NET). W
 - `Microsoft.Xrm.Data.PowerShell` — "not compatible yet with PowerShell Core and must use v4 or v5" (verbatim from module README at https://github.com/seanmcne/Microsoft.Xrm.Data.PowerShell). Silently exits at import time under pwsh.
 
 Both require `#Requires -PSEdition Desktop`. Add new entries to `rules/module-requirements.json` without touching source code.
+
+**Import form coverage:** the `import_pattern` for both seeded entries accepts both the positional form (`Import-Module Microsoft.Xrm.Data.PowerShell`) and the explicit-named form (`Import-Module -Name Microsoft.Xrm.Data.PowerShell`), with optional single or double quotes around the module name. New entries should follow the same shape. See `probe-module-env-xrmdata-name-form.ps1`.
 
 ## Rule types
 

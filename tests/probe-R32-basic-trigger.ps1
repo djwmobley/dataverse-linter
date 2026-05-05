@@ -3,8 +3,8 @@
 # The correct parameter is -Tenant. This script uses -TenantId exactly as an
 # author would accidentally write it. R32 MUST fire.
 #
-# Note: R28 will also fire (no idempotency guard) and R16 is deleted, so only
-# R32 is asserted in mustFire for this probe.
+# The fixture includes an `if ($null -eq $existing)` guard so R28 does not fire,
+# isolating R32 as the single rule under test.
 
 $optionSets = @("a")
 

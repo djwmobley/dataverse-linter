@@ -299,13 +299,25 @@ const probes = [
         expectClean: true
     },
     {
+        file: path.join(__dirname, 'probe-R32-singlequote-arg.ps1'),
+        label: 'probe-R32-singlequote-arg',
+        // Trigger probe with single-quoted args between Connect-PnPOnline and -TenantId.
+        // PnP examples idiomatically use single-quoted strings; the original [^'\n]* pattern
+        // terminated at the first single quote and missed this case. The widened [^\n]*
+        // pattern catches it. R32 MUST fire.
+        mustFire: ['R32'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
         file: path.join(__dirname, 'probe-R32-tenantid-inline-comment.ps1'),
         label: 'probe-R32-tenantid-inline-comment',
         // DOCUMENTED FALSE POSITIVE: -TenantId appears in a trailing inline comment on
-        // the same line as a correct Connect-PnPOnline call. The pattern [^'\n]* spans
+        // the same line as a correct Connect-PnPOnline call. The pattern [^\n]* spans
         // through the comment before the newline. R32 fires even though the code is correct.
         // This probe anchors the known limitation as a regression anchor.
-        // EXPECTED: R32 fires (false positive by design of [^'\n]* greedy class).
+        // EXPECTED: R32 fires (false positive accepted in exchange for catching the
+        // single-quoted-arg case via [^\n]* widening).
         mustFire: ['R32'],
         mustNotFire: [],
         expectClean: false
@@ -583,6 +595,17 @@ const probes = [
         mustFire: [],
         mustNotFire: ['module-env-mismatch'],
         expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-module-env-xrmdata-name-form.ps1'),
+        label: 'probe-module-env-xrmdata-name-form',
+        // Trigger probe with the explicit `Import-Module -Name <module>` form, missing
+        // #Requires -PSEdition Desktop. The original import_pattern only matched
+        // `Import-Module Microsoft.Xrm.Data.PowerShell` (no -Name); the widened
+        // pattern accepts both forms. module-env-mismatch MUST fire.
+        mustFire: ['module-env-mismatch'],
+        mustNotFire: [],
+        expectClean: false
     }
 ];
 

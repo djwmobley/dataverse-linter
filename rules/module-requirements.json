@@ -1,7 +1,7 @@
 [
   {
     "module": "Microsoft.Xrm.Tooling.CrmConnector.PowerShell",
-    "import_pattern": "Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell|Connect-CrmOnlineDiscovery",
+    "import_pattern": "Import-Module(?:\\s+-Name)?\\s+(?:['\"]?)Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell(?:['\"]?)|Connect-CrmOnlineDiscovery",
     "requires_directives": ["#Requires -PSEdition Desktop"],
     "rule_id": "module-env-mismatch",
     "severity": "ERROR",
@@ -9,7 +9,7 @@
   },
   {
     "module": "Microsoft.Xrm.Data.PowerShell",
-    "import_pattern": "Import-Module\\s+(?:['\"]?)Microsoft\\.Xrm\\.Data\\.PowerShell(?:['\"]?)",
+    "import_pattern": "Import-Module(?:\\s+-Name)?\\s+(?:['\"]?)Microsoft\\.Xrm\\.Data\\.PowerShell(?:['\"]?)",
     "requires_directives": ["#Requires -PSEdition Desktop"],
     "rule_id": "module-env-mismatch",
     "severity": "ERROR",
