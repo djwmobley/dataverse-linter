@@ -156,5 +156,17 @@
     "pattern": "\\[datetime\\]::TryParse\\s*\\(\\s*[^,]+,\\s*\\[ref\\]\\s*\\$null\\s*\\)",
     "message": "[datetime]::TryParse($s, [ref]$null) is an overload-resolution hazard. The 2-argument .NET overloads expect (String, out DateTime) or (ReadOnlySpan<Char>, out DateTime); passing [ref]$null makes the parsed DateTime value unreachable, and on .NET 7+ may resolve to a different overload and fail outright. Use '$result = $s -as [datetime]' instead: returns $null on failure with no exception and no overload ambiguity. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse",
     "enabled": true
+  },
+  {
+    "id": "R37",
+    "title": "OData $filter on Lookup attribute uses bare logicalname instead of _<logicalname>_value",
+    "severity": "ERROR",
+    "type": "regex-template",
+    "pattern": "(?:^|`)\\$filter=[^\"'\\n]*\\b(${variables})\\b\\s+eq\\b",
+    "variables": [
+      "appmoduleidunique"
+    ],
+    "message": "OData $filter equality on a Lookup attribute must use the '_<logicalname>_value' form (e.g., _appmoduleidunique_value eq <guid>), not the bare logicalname. The bare logicalname is a navigation property for $expand; using it in $filter produces error 0x80060888 'Could not find a property named <name>'. Implementation note: the variable list uses hard-coded known Lookup logicalnames; extend via 'node src/rule-manager.js set-variables R37 <name1> <name2> ...'. Substrate citations: (1) appmodulecomponent.appmoduleidunique Type=Lookup, Targets=appmodule -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent; (2) OData Lookup filter pattern _<logicalname>_value -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows (section: 'Filter on lookup property', example: $filter=_owninguser_value eq <systemuserid value>).",
+    "enabled": true
   }
 ]
