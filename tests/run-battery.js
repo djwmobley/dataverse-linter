@@ -671,6 +671,39 @@ probes.forEach(probe => {
 });
 
 // ---------------------------------------------------------------------------
+// Hook tests: test-stop-hook.js and test-pretool-bash-hook.js
+// ---------------------------------------------------------------------------
+console.log("Running hook test: test-stop-hook.js...");
+{
+    const hookTestPath = path.join(__dirname, 'test-stop-hook.js');
+    try {
+        const out = execSync('node "' + hookTestPath + '"', { stdio: 'pipe' }).toString();
+        console.log(out.trim());
+        console.log("  test-stop-hook.js: PASS\n");
+    } catch (e) {
+        const out = (e.stdout ? e.stdout.toString() : '') + (e.stderr ? e.stderr.toString() : '');
+        console.error(out.trim());
+        console.error("  test-stop-hook.js: FAIL\n");
+        overallPass = false;
+    }
+}
+
+console.log("Running hook test: test-pretool-bash-hook.js...");
+{
+    const hookTestPath = path.join(__dirname, 'test-pretool-bash-hook.js');
+    try {
+        const out = execSync('node "' + hookTestPath + '"', { stdio: 'pipe' }).toString();
+        console.log(out.trim());
+        console.log("  test-pretool-bash-hook.js: PASS\n");
+    } catch (e) {
+        const out = (e.stdout ? e.stdout.toString() : '') + (e.stderr ? e.stderr.toString() : '');
+        console.error(out.trim());
+        console.error("  test-pretool-bash-hook.js: FAIL\n");
+        overallPass = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit test: test-r25-template.js
 // ---------------------------------------------------------------------------
 console.log("Running unit test: test-r25-template.js...");
