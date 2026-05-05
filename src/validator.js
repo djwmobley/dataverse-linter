@@ -2,8 +2,19 @@ const fs = require("fs");
 const path = require("path");
 
 function validate(extraction) {
-    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, filePath } = extraction;
+    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, functionBodyRanges, filePath } = extraction;
     const errors = [...(parseErrors || [])];
+
+    // Helper: returns true if `idx` lies strictly inside any [start, end) range.
+    // Used by rules with scope: "script-only" to skip matches that occur inside
+    // a `function NAME { ... }` body.
+    function isInsideFunctionBody(idx) {
+        if (!functionBodyRanges || functionBodyRanges.length === 0) return false;
+        for (const r of functionBodyRanges) {
+            if (idx > r[0] && idx < r[1]) return true;
+        }
+        return false;
+    }
 
     const overridesPath = path.join(__dirname, "../rules/overrides.json");
     let overrides = {};
@@ -46,10 +57,27 @@ function validate(extraction) {
             targetContent = strippedContent;
         }
 
+        // requires_absent (regex / regex-template only): a conjunction guard.
+        // The rule fires only when the main pattern matches AND the
+        // requires_absent regex does NOT match the rawContent. requires_absent
+        // is matched against rawContent so that #Requires comment directives
+        // (which strippedContent removes) remain visible to the guard check.
+        let requiresAbsentSatisfied = true;
+        if (rule.requires_absent) {
+            const guardRe = new RegExp(rule.requires_absent, "m");
+            // If the guard pattern IS present, the requires_absent condition is
+            // NOT satisfied -- meaning the rule should NOT fire (guard in place).
+            if (guardRe.test(rawContent)) {
+                requiresAbsentSatisfied = false;
+            }
+        }
+
         if (rule.type === "regex" && rule.pattern) {
+            if (!requiresAbsentSatisfied) return; // guard present -> rule suppressed
             const regex = new RegExp(rule.pattern, "gm");
             let match;
             while ((match = regex.exec(targetContent)) !== null) {
+                if (rule.scope === "script-only" && isInsideFunctionBody(match.index)) continue;
                 // Find line number roughly in the original strippedContent
                 const lines = strippedContent.substring(0, match.index).split('\n');
                 errors.push({
@@ -61,6 +89,7 @@ function validate(extraction) {
         }
 
         if (rule.type === "regex-template" && rule.pattern) {
+            if (!requiresAbsentSatisfied) return; // guard present -> rule suppressed
             if (!rule.variables || rule.variables.length === 0) {
                 process.stderr.write(`[validator] regex-template rule ${rule.id} has no variables; skipping\n`);
             } else {
@@ -69,6 +98,7 @@ function validate(extraction) {
                 const regex = new RegExp(resolvedPattern, "gm");
                 let match;
                 while ((match = regex.exec(targetContent)) !== null) {
+                    if (rule.scope === "script-only" && isInsideFunctionBody(match.index)) continue;
                     const lines = strippedContent.substring(0, match.index).split('\n');
                     errors.push({
                         rule: rule.id,

@@ -270,10 +270,12 @@ const probes = [
         file: path.join(__dirname, 'probe-module-env-ok.ps1'),
         label: 'probe-module-env-ok',
         // Same import WITH #Requires -PSEdition Desktop. module-env-mismatch must NOT fire.
-        // R12 still fires unconditionally; expectClean false.
+        // v0.3.1: R12 is now conjunction-aware and ALSO suppresses when the guard is
+        // present, so this probe is now CLEAN. (Was expectClean: false in v0.3.0 because
+        // R12 fired unconditionally.) Regression anchor for the R12 refinement.
         mustFire: [],
-        mustNotFire: ['module-env-mismatch'],
-        expectClean: false
+        mustNotFire: ['module-env-mismatch', 'R12'],
+        expectClean: true
     },
 
     // =========================================================================
@@ -606,6 +608,128 @@ const probes = [
         mustFire: ['module-env-mismatch'],
         mustNotFire: [],
         expectClean: false
+    },
+
+    // =========================================================================
+    // v0.3.1 R12 conjunction-aware refinement
+    // R12 fires only when (Connect-CrmOnlineDiscovery OR Xrm.Tooling import)
+    // matches AND the rawContent does NOT contain
+    //   '#Requires -Version 5.1'  or  '#Requires -PSEdition Desktop'.
+    // Citations:
+    //   - https://www.powershellgallery.com/packages/Microsoft.Xrm.Tooling.CrmConnector.PowerShell
+    //     declares minimum PS version 5.1 and PSEdition Desktop.
+    //   - https://learn.microsoft.com/en-us/power-apps/developer/data-platform/xrm-tooling/use-powershell-cmdlets-xrm-tooling-connect
+    //     describes the cmdlets as "Windows PowerShell" cmdlets.
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_requires
+    //     describes the #Requires directive forms.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R12-cmdlet-no-guard.ps1'),
+        label: 'probe-R12-cmdlet-no-guard',
+        // True positive: cmdlet present, no #Requires guard. R12 MUST fire.
+        mustFire: ['R12'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-cmdlet-with-guard.ps1'),
+        label: 'probe-R12-cmdlet-with-guard',
+        // True negative for R12 specifically: cmdlet present WITH
+        // #Requires -Version 5.1. R12 MUST NOT fire (the v0.3.1 conjunction
+        // suppresses it when the guard is present). The probe is NOT
+        // expectClean=true because module-env-mismatch fires independently:
+        // its import_pattern in module-requirements.json includes
+        // Connect-CrmOnlineDiscovery and its required directive is specifically
+        // '#Requires -PSEdition Desktop' (not -Version 5.1). That's a separate
+        // rule with its own contract; R12's contract is what's being asserted here.
+        mustFire: [],
+        mustNotFire: ['R12'],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-cmdlet-with-desktop-guard.ps1'),
+        label: 'probe-R12-cmdlet-with-desktop-guard',
+        // True negative: cmdlet present WITH #Requires -PSEdition Desktop.
+        // Both -Version 5.1 and -PSEdition Desktop are accepted as guards
+        // (substrate-verified: PS Gallery declares PSEdition Desktop, MS Learn
+        // describes the cmdlets as "Windows PowerShell" cmdlets). R12 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R12'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-no-cmdlet-no-guard.ps1'),
+        label: 'probe-R12-no-cmdlet-no-guard',
+        // Negative control: neither the trigger pattern nor the guard is present.
+        // R12 MUST NOT fire (main pattern doesn't match).
+        mustFire: [],
+        mustNotFire: ['R12'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R12-cmdlet-in-string-with-guard.ps1'),
+        label: 'probe-R12-cmdlet-in-string-with-guard',
+        // True negative: cmdlet name appears only in a string literal, guard is
+        // present. R12 MUST NOT fire (guard suppresses globally even if the
+        // pattern matches the literal). Documents that string-literal cmdlet
+        // mentions are benign once the guard is in place.
+        mustFire: [],
+        mustNotFire: ['R12'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // v0.3.1 R25 scope-aware refinement
+    // R25 fires only on assignments at script scope (not inside any
+    // `function NAME { ... }` body). Implementation: extractor.computeFunctionBodyRanges
+    // walks the file and records [openBrace, closeBrace] index pairs for each
+    // function declaration body; validator skips matches whose index lies inside
+    // any range when rule.scope === "script-only".
+    // Limitations documented in README: anonymous scriptblocks `$sb = { ... }`
+    // are NOT tracked; matches inside an anonymous scriptblock still fire.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R25-script-scope-body.ps1'),
+        label: 'probe-R25-script-scope-body',
+        // True positive: $body = ... at script scope (inside an `if` block, but
+        // `if` is not a function declaration). R25 MUST fire.
+        mustFire: ['R25'],
+        mustNotFire: [],
+        expectClean: false,
+        exactFireCount: { 'R25': 1 }
+    },
+    {
+        file: path.join(__dirname, 'probe-R25-function-local-body.ps1'),
+        label: 'probe-R25-function-local-body',
+        // True negative (regression anchor for the v0.3.1 fix): $body = ...
+        // inside `function Create-LookupFromRow { ... }`. PowerShell function
+        // bodies have their own variable scope; a function-local $body cannot
+        // shadow $script:body, which is the failure mode R25 catches.
+        // R25 MUST NOT fire. This anchors the false positive that caused
+        // wire_cross_module_connections.ps1 v0.2 line 167 to be linted as a
+        // violation under v0.3.0.
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R25-watch-name-prefixed.ps1'),
+        label: 'probe-R25-watch-name-prefixed',
+        // True negative: $script:body = ... at script scope. The explicit prefix
+        // means there is no shadowing risk. R25 MUST NOT fire (the leading $
+        // followed by 'script:' does not match the regex `^\\s*\\$(${variables})\\s*=`).
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R25-non-watch-name.ps1'),
+        label: 'probe-R25-non-watch-name',
+        // True negative: $widget at script scope, name not in the watch-list.
+        // R25 MUST NOT fire (template variable substitution is exact).
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
     }
 ];
 

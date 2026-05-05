@@ -2,7 +2,13 @@
 
 function stripComments(content) {
     // Simple heuristic to strip PowerShell full-line comments to avoid regex-inverse bypasses.
-    return content.replace(/^\s*#.*$/gm, '');
+    // v0.3.1 change: replace matched comment characters with spaces (preserving newlines)
+    // so that strippedContent stays length-aligned with rawContent. This matters for
+    // scope-aware rules whose match indices in strippedContent must map to function-body
+    // ranges computed against the same surface. Previously, the empty-string replacement
+    // caused index-misalignment between strippedContent and rawContent, but no rule depended
+    // on alignment so it was unnoticed.
+    return content.replace(/^\s*#.*$/gm, (m) => m.replace(/[^\r\n]/g, ' '));
 }
 
 /**
@@ -42,10 +48,196 @@ function buildNoCommentNoStringContent(content) {
     return s;
 }
 
+/**
+ * Compute byte-index ranges in `content` that fall inside the body of a
+ * `function NAME { ... }` declaration. Used by rules that scope to "script-only"
+ * (e.g. R25): a regex match whose start index lies in any of these ranges is
+ * inside a function body and is suppressed.
+ *
+ * Implementation: walk `content` char by char with a small state machine that
+ *   1. tracks whether we're inside a string literal (single or double quoted)
+ *      or a here-string body or a block / line comment, and
+ *   2. on encountering the keyword `function` outside any string/comment,
+ *      finds the next `{` at the current brace-depth and records [openIdx, closeIdx]
+ *      for the matching close brace.
+ *
+ * Limitations (documented in README per-rule failure_modes):
+ *   - Anonymous scriptblocks (e.g. `$sb = { $body = ... }`) are NOT treated as
+ *     function bodies — those still match script-scope rules. This is an
+ *     accepted limitation because anonymous scriptblocks are rarer than
+ *     named-function declarations and the heuristic stays bounded.
+ *   - Filter declarations (`filter Foo { ... }`) are not treated as function
+ *     bodies. PowerShell uses `filter` rarely; if needed, a future rev can
+ *     add the keyword to the scanner.
+ *   - Nested functions inside functions: the outer range covers the inner one,
+ *     so a match inside the inner is still inside a function body. Correct
+ *     by inclusion (any function-body containment suppresses).
+ *   - Heredoc / here-string bodies are skipped during the scan; opening tokens
+ *     `@"` and `@'` are recognized.
+ */
+function computeFunctionBodyRanges(content) {
+    const ranges = [];
+    const len = content.length;
+    let i = 0;
+
+    // Skip helpers --------------------------------------------------------
+    function skipLineComment(start) {
+        let j = start;
+        while (j < len && content[j] !== '\n') j++;
+        return j;
+    }
+    function skipBlockComment(start) {
+        let j = start + 2; // past <#
+        while (j < len - 1) {
+            if (content[j] === '#' && content[j + 1] === '>') return j + 2;
+            j++;
+        }
+        return len;
+    }
+    function skipDoubleQuoted(start) {
+        // Backtick is the PS escape character; any char following backtick is consumed.
+        let j = start + 1;
+        while (j < len) {
+            const c = content[j];
+            if (c === '`' && j + 1 < len) { j += 2; continue; }
+            if (c === '"') return j + 1;
+            j++;
+        }
+        return len;
+    }
+    function skipSingleQuoted(start) {
+        // '' is the embedded-quote escape; otherwise any char until the closing '.
+        let j = start + 1;
+        while (j < len) {
+            if (content[j] === "'") {
+                if (content[j + 1] === "'") { j += 2; continue; }
+                return j + 1;
+            }
+            j++;
+        }
+        return len;
+    }
+    function skipHereString(start, quote) {
+        // Pattern: @"..."@   or   @'...'@
+        // Body terminates at \n followed by optional whitespace? Actually canonical
+        // here-string termination is the closing token at the start of a line.
+        // We use a simple "find next quote@" scan; close enough for brace tracking.
+        let j = start + 2;
+        const close = quote + '@';
+        while (j < len - 1) {
+            if (content[j] === quote && content[j + 1] === '@') return j + 2;
+            j++;
+        }
+        return len;
+    }
+
+    // Find a candidate `function` keyword.  We require that the previous
+    // non-whitespace char is one of: start-of-file, ';', '{', '}', '\n', ')'
+    // — i.e. statement-start contexts.  Otherwise the literal `function` could
+    // be inside an identifier or a string we already skipped.
+    function isStatementStart(idx) {
+        let k = idx - 1;
+        while (k >= 0 && (content[k] === ' ' || content[k] === '\t')) k--;
+        if (k < 0) return true;
+        const c = content[k];
+        return c === '\n' || c === ';' || c === '{' || c === '}' || c === '\r';
+    }
+    // Match keyword `function` (case-insensitive) at position i with a word-boundary.
+    function matchesFunctionKeyword(idx) {
+        if (idx + 8 > len) return false;
+        const slice = content.substring(idx, idx + 8);
+        if (!/^function$/i.test(slice)) return false;
+        const next = content[idx + 8];
+        // Word-boundary: next char must not be alphanumeric or _ or -.
+        return next === undefined || /[\s({]/.test(next);
+    }
+
+    while (i < len) {
+        const c = content[i];
+
+        // Comments / strings outside of function-body detection.
+        if (c === '<' && content[i + 1] === '#') { i = skipBlockComment(i); continue; }
+        if (c === '#') { i = skipLineComment(i); continue; }
+        if (c === '@' && (content[i + 1] === '"' || content[i + 1] === "'")) {
+            i = skipHereString(i, content[i + 1]);
+            continue;
+        }
+        if (c === '"') { i = skipDoubleQuoted(i); continue; }
+        if (c === "'") { i = skipSingleQuoted(i); continue; }
+
+        if (matchesFunctionKeyword(i) && isStatementStart(i)) {
+            // Find the next `{` that opens the function body, skipping strings/comments
+            // and balanced parentheses (the optional [CmdletBinding()][param(...)] etc.).
+            let j = i + 8;
+            let parenDepth = 0;
+            let bracketDepth = 0;
+            let openBrace = -1;
+            while (j < len) {
+                const cc = content[j];
+                if (cc === '<' && content[j + 1] === '#') { j = skipBlockComment(j); continue; }
+                if (cc === '#') { j = skipLineComment(j); continue; }
+                if (cc === '@' && (content[j + 1] === '"' || content[j + 1] === "'")) {
+                    j = skipHereString(j, content[j + 1]); continue;
+                }
+                if (cc === '"') { j = skipDoubleQuoted(j); continue; }
+                if (cc === "'") { j = skipSingleQuoted(j); continue; }
+                if (cc === '(') { parenDepth++; j++; continue; }
+                if (cc === ')') { parenDepth--; j++; continue; }
+                if (cc === '[') { bracketDepth++; j++; continue; }
+                if (cc === ']') { bracketDepth--; j++; continue; }
+                if (cc === '{' && parenDepth === 0 && bracketDepth === 0) { openBrace = j; break; }
+                j++;
+            }
+            if (openBrace < 0) { i++; continue; }
+
+            // Walk forward to find the matching `}`. Increment depth on `{`, decrement on `}`.
+            let depth = 1;
+            let k = openBrace + 1;
+            while (k < len && depth > 0) {
+                const cc = content[k];
+                if (cc === '<' && content[k + 1] === '#') { k = skipBlockComment(k); continue; }
+                if (cc === '#') { k = skipLineComment(k); continue; }
+                if (cc === '@' && (content[k + 1] === '"' || content[k + 1] === "'")) {
+                    k = skipHereString(k, content[k + 1]); continue;
+                }
+                if (cc === '"') { k = skipDoubleQuoted(k); continue; }
+                if (cc === "'") { k = skipSingleQuoted(k); continue; }
+                if (cc === '{') { depth++; k++; continue; }
+                if (cc === '}') { depth--; k++; if (depth === 0) break; continue; }
+                k++;
+            }
+            // Range covers the body interior [openBrace+1, k-1] inclusive.
+            // We record [openBrace, k] (half-open) so a match index strictly between
+            // openBrace and k is inside the function body.
+            ranges.push([openBrace, k]);
+            i = openBrace + 1; // continue scanning inside; nested functions also recorded
+            continue;
+        }
+
+        i++;
+    }
+
+    return ranges;
+}
+
+function isInsideAnyRange(idx, ranges) {
+    for (const [start, end] of ranges) {
+        if (idx > start && idx < end) return true;
+    }
+    return false;
+}
+
 function extract(filePath) {
     const content = fs.readFileSync(filePath, "utf8");
     const strippedContent = stripComments(content);
     const noCommentNoStringContent = buildNoCommentNoStringContent(content);
+    // Compute function-body ranges against rawContent. stripComments now preserves
+    // length (replaces matched chars with spaces so newlines and offsets align), so
+    // ranges computed against rawContent are valid for matches whose index is
+    // produced from strippedContent. The function-body scanner needs to see block
+    // comment delimiters (<# ... #>) intact, which only rawContent provides --
+    // strippedContent blanks the `#>` close because it matches `^\s*#.*$`.
+    const functionBodyRanges = computeFunctionBodyRanges(content);
     
     const optionSetsMatch = content.match(/\$optionSets\s*=\s*@\(([\s\S]*?)\)/);
     let optionSets = [];
@@ -80,7 +272,7 @@ function extract(filePath) {
         }
     }
 
-    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, filePath };
+    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, functionBodyRanges, filePath };
 }
 
-module.exports = { extract };
+module.exports = { extract, computeFunctionBodyRanges, isInsideAnyRange };

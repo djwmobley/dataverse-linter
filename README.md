@@ -131,12 +131,12 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | ID | Type | Severity | What it catches |
 |---|---|---|---|
 | R07 | regex | ERROR | `pac solution import --force-overwrite` usage; flag does not resolve metadata conflicts and should be paired with attribute deletion. |
-| R12 | regex | ERROR | `Connect-CrmOnlineDiscovery` or `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` import; these modules hang under pwsh — script must run under `powershell.exe` 5.1. |
+| R12 | regex (conjunction) | ERROR | `Connect-CrmOnlineDiscovery` or `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` import without a `#Requires -Version 5.1` or `#Requires -PSEdition Desktop` guard; these modules hang under pwsh — script must run under `powershell.exe` 5.1. v0.3.1 made the rule conjunction-aware via `requires_absent`: with either guard present the rule is suppressed. |
 | R13 | regex | ERROR | `$select`, `$filter`, or `$expand` inside a double-quoted string without a backtick escape; PowerShell interpolates these, corrupting the OData query. |
 | R18 | regex | ERROR | `BooleanAttributeMetadata` payload missing `TrueOption`/`FalseOption`; both are required by the Dataverse Web API. |
 | R21 | regex | ERROR | `Invoke-RestMethod POST` appears after `pac solution import`; managed solution import should precede table/column creation to avoid metadata layering conflicts. |
 | R24 | regex | ERROR | `pac solution import` without `--publish-changes`; customizations remain unpublished after import, leaving the deployment half-broken. |
-| R25 | regex-template | ERROR | Assignment to a bare script-scope variable matching one of the configured names (default: `headers`, `body`, `conn`, `options`, `response`, `result`); these shadow `$script:` prefixed equivalents. |
+| R25 | regex-template (script-scope only) | ERROR | Assignment to a bare script-scope variable matching one of the configured names (default: `headers`, `body`, `conn`, `options`, `response`, `result`); these shadow `$script:` prefixed equivalents. v0.3.1 made the rule scope-aware via `scope: "script-only"`: matches inside a `function NAME { ... }` body are suppressed because PowerShell function bodies have their own variable scope and cannot shadow `$script:`. |
 | R26 | regex | ERROR | OData query for `FormulaDefinition` on the base `AttributeMetadata` endpoint; a derived type cast is required (e.g., `/Microsoft.Dynamics.CRM.DecimalAttributeMetadata`). |
 | R28 | regex-inverse | ERROR | Script lacks an idempotency guard (`if ($null -eq ...)`); Web API POST calls without a guard create duplicate records on every re-run. |
 | R29 | regex | ERROR | Non-ASCII character (em-dash, section sign, smart quotes, ellipsis, bullet, en-dash, nbsp) inside a double-quoted string literal; PS 5.1's brace-counter silently misbehaves and produces `MissingEndCurlyBrace` at unrelated lines. Same chars in `#` comments are safe. |
@@ -163,7 +163,28 @@ When a managed solution import encounters a conflicting component (for example, 
 
 ### R12 — `Connect-CrmOnlineDiscovery` / `Microsoft.Xrm.Tooling.CrmConnector.PowerShell`
 
-These modules are built against the .NET Framework and use WinAPI threading primitives that are incompatible with PowerShell Core (pwsh 7). When imported under pwsh, the module either fails to load silently or hangs indefinitely on the connection attempt. The script must carry `#Requires -PSEdition Desktop` and be invoked via `powershell.exe`, not `pwsh.exe`. The `module-env-mismatch` rule provides a complementary check via `module-requirements.json`.
+These modules are built against the .NET Framework and use WinAPI threading primitives that are incompatible with PowerShell Core (pwsh 7). When imported under pwsh, the module either fails to load silently or hangs indefinitely on the connection attempt. The script must carry a guard directive (either `#Requires -Version 5.1` or `#Requires -PSEdition Desktop`) and be invoked via `powershell.exe`, not `pwsh.exe`. The `module-env-mismatch` rule provides a complementary check via `module-requirements.json` (which specifically requires `#Requires -PSEdition Desktop`; -Version 5.1 is accepted by R12 but not by `module-env-mismatch`).
+
+**v0.3.1 — conjunction-aware:** R12 now uses the `requires_absent` rule field. The rule fires only when the main pattern matches AND the rawContent does NOT match `^#Requires\s+(?:-Version\s+5\.1|-PSEdition\s+Desktop)`. Either guard is accepted as satisfying the rule. The previous behavior (fire on every cmdlet occurrence regardless of context) caused the linter to fire on legitimate, correct PowerShell that already had the guard in place — including hits on the cmdlet name appearing in comments and string literals. With the conjunction in place, R12 now matches the message's stated intent: "Ensure script has #Requires ... and runs under powershell.exe."
+
+Substrate citations:
+
+- PowerShell Gallery package metadata: https://www.powershellgallery.com/packages/Microsoft.Xrm.Tooling.CrmConnector.PowerShell — declares minimum PowerShell version 5.1 and PSEdition Desktop.
+- MS Learn (Use PowerShell cmdlets for XRM tooling): https://learn.microsoft.com/en-us/power-apps/developer/data-platform/xrm-tooling/use-powershell-cmdlets-xrm-tooling-connect — describes the cmdlets as "Windows PowerShell" cmdlets (Desktop edition).
+- About #Requires: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_requires — describes the -Version and -PSEdition forms.
+
+**Probes (v0.3.1):**
+
+- `probe-R12-cmdlet-no-guard.ps1` — true positive: cmdlet present, no guard. R12 fires.
+- `probe-R12-cmdlet-with-guard.ps1` — true negative: cmdlet present, `#Requires -Version 5.1` present. R12 suppressed. (`module-env-mismatch` fires independently because its required directive is the stricter `-PSEdition Desktop`.)
+- `probe-R12-cmdlet-with-desktop-guard.ps1` — true negative: cmdlet present, `#Requires -PSEdition Desktop` present. R12 suppressed. Probe is fully clean.
+- `probe-R12-no-cmdlet-no-guard.ps1` — negative control: neither pattern matches. R12 does not fire.
+- `probe-R12-cmdlet-in-string-with-guard.ps1` — true negative: cmdlet name appears only in a string literal AND the guard is present. R12 suppressed (guard is dispositive). Documents that string-literal cmdlet mentions are benign once the guard is in place.
+
+**Known limitations:**
+
+- The guard is checked in `rawContent` via a single-line regex anchor (`^#Requires ...` with `m` flag) — only `#Requires` lines that begin at the start of a line are recognized. A `#Requires` directive that follows code on the same line (which is non-standard PowerShell and would not work as a parse-time gate anyway) is not recognized.
+- A `#Requires -Version 7.0` or other non-Desktop version directive does NOT satisfy the guard; only `-Version 5.1` or `-PSEdition Desktop` are accepted. This is correct: the rule's purpose is to ensure the script cannot be launched under pwsh 7 against the legacy module.
 
 ### R13 — `$select`/`$filter`/`$expand` in double-quoted strings
 
@@ -184,6 +205,24 @@ A `pac solution import` that succeeds at the CLI level does not automatically pu
 ### R25 — Unprefixed assignment shadows `$script:` variable
 
 In PowerShell, a bare `$headers = ...` assignment at script scope is identical to `$script:headers = ...`. If a helper function later does `$headers = ...` as a local variable, it shadows the script-scope variable silently — subsequent code using `$script:headers` gets the wrong value, commonly manifesting as a 401 (auth dict wiped) on subsequent Web API calls. Use unique local names or explicit `$local:` / `$script:` prefixes to avoid the ambiguity.
+
+**v0.3.1 — scope-aware:** R25 now uses the `scope: "script-only"` rule field. Matches whose match index lies inside a `function NAME { ... }` declaration body are suppressed. PowerShell function bodies have their own variable scope; an assignment of the form `$body = ...` inside a function is function-local and CANNOT shadow `$script:body` (which is what R25 is designed to catch). The previous behavior fired on legitimate function-local assignments, forcing authors to either rename variables (acceptable) or pollute the watch-list with apologetic comments. Scope-awareness restores the rule to its stated intent: "Unprefixed assignment **at script scope** shadows `$script:`."
+
+Implementation: `extractor.computeFunctionBodyRanges(rawContent)` walks the file with a string-/comment-aware scanner, finds each `function` keyword at a statement-start position, then traces the matching open/close brace to record `[openBraceIdx, closeBraceIdx]`. The validator skips matches whose `match.index` falls strictly inside any recorded range. Range computation uses `rawContent` because `strippedContent` blanks `#>` block-comment terminators; using rawContent keeps block comments balanced. The v0.3.1 length-preserving `stripComments` change (replace matched chars with spaces, preserving newlines) ensures `match.index` in `strippedContent` aligns with rawContent indices.
+
+**Probes (v0.3.1):**
+
+- `probe-R25-script-scope-body.ps1` — true positive: `$body = @{...}` at script scope (inside an `if` block — `if` is not a function declaration). R25 fires once.
+- `probe-R25-function-local-body.ps1` — true negative (regression anchor for the v0.3.1 fix): `$body = @{...}` inside `function Create-LookupFromRow { ... }`. R25 does not fire. This anchors the false positive that caused `wire_cross_module_connections.ps1` v0.2 line 167 to be linted as a violation under v0.3.0.
+- `probe-R25-watch-name-prefixed.ps1` — true negative: `$script:body = ...` at script scope. The leading `$script:` makes the leading regex `^\s*\$(headers|body|...)\s*=` not match, so R25 does not fire.
+- `probe-R25-non-watch-name.ps1` — true negative: `$widget = ...` at script scope. The variable name is not in the watch-list; R25 does not fire.
+
+**Known limitations:**
+
+- **Anonymous scriptblocks not tracked.** A construct like `$sb = { $body = "x" }` (anonymous scriptblock literal at script scope) IS a function-local scope at runtime, but the v0.3.1 scanner only tracks `function NAME { ... }` declarations, not anonymous `{ ... }` scriptblocks. R25 will fire on `$body` inside an anonymous scriptblock at script scope, even though the runtime behavior is identical to a function. This is an accepted limitation; if it becomes a real false-positive source, a future rev can extend `computeFunctionBodyRanges` to track scriptblock literals (the heuristic is harder because `{ ... }` appears in many non-scriptblock contexts: hashtables, if-blocks, foreach-blocks, etc.).
+- **`filter` declarations not tracked.** `filter Foo { ... }` is treated like a function at runtime but the v0.3.1 scanner anchors on the `function` keyword. PowerShell `filter` is rare; not worth a separate scanner pass yet.
+- **Nested functions covered by inclusion.** A function declared inside another function's body has its own range, but the outer range already covers it; either range matching suppresses the rule, so behavior is correct (function-local at any nesting level is suppressed).
+- **Statement-start heuristic.** The scanner requires the `function` keyword to appear after start-of-file, `\n`, `;`, `{`, `}`, or `\r` (with optional intervening whitespace). A `function` keyword that follows a non-statement-start char is treated as an identifier and not as a declaration. This is correct PowerShell parsing for the cases the scanner targets but is not a full PS-AST parse.
 
 ### R26 — OData type-casting constraint for `FormulaDefinition`
 
@@ -308,6 +347,47 @@ Example — R28 fires when `if ($null -eq` is missing from real executable code:
   "enabled": true
 }
 ```
+
+### Optional rule fields (regex / regex-template) — v0.3.1
+
+Both `regex` and `regex-template` rules accept these optional fields:
+
+#### `requires_absent` — conjunction guard
+
+A regex pattern. If set, the rule fires only when the main `pattern` matches AND the `requires_absent` regex does NOT match the rawContent. Used to express "this is a violation UNLESS a guard directive is present" — for example, R12 fires on `Connect-CrmOnlineDiscovery` only when neither `#Requires -Version 5.1` nor `#Requires -PSEdition Desktop` is in the file.
+
+The `requires_absent` regex is matched against `rawContent` (not `strippedContent`) so that `#Requires` comment directives — which `stripComments` would otherwise blank — remain visible to the guard check. The match uses the `m` flag (multiline anchors).
+
+```json
+{
+  "id": "R12",
+  "type": "regex",
+  "pattern": "Connect-CrmOnlineDiscovery|Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell",
+  "requires_absent": "^#Requires\\s+(?:-Version\\s+5\\.1|-PSEdition\\s+Desktop)",
+  "message": "These modules hang in pwsh. Ensure script has #Requires -Version 5.1 or #Requires -PSEdition Desktop ...",
+  "severity": "ERROR",
+  "enabled": true
+}
+```
+
+#### `scope: "script-only"` — function-body suppression
+
+When set on a `regex` or `regex-template` rule, matches whose start index falls strictly inside any `function NAME { ... }` declaration body are suppressed. Used by R25 to enforce that "unprefixed assignment shadows script scope" applies only to script-scope assignments — function-local assignments cannot shadow `$script:` and should not fire the rule.
+
+```json
+{
+  "id": "R25",
+  "type": "regex-template",
+  "pattern": "^\\s*\\$(${variables})\\s*=",
+  "variables": ["headers", "body", "conn", "options", "response", "result"],
+  "scope": "script-only",
+  "message": "Unprefixed assignment at script scope shadows $script:.",
+  "severity": "ERROR",
+  "enabled": true
+}
+```
+
+Function-body ranges are computed once per file in the extractor (`computeFunctionBodyRanges`). The scanner is string-/comment-aware: it skips `<# ... #>` block comments, `# ...` line comments, single-/double-quoted strings, and here-strings (`@"..."@` and `@'...'@`) so that a `function` keyword inside a string literal or a comment is not mistaken for a declaration. Limitations: anonymous scriptblocks (`$sb = { ... }`) and `filter` declarations are not tracked; see the R25 failure_modes section for details.
 
 ### `regex-template`
 
