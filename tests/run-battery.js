@@ -730,6 +730,24 @@ const probes = [
         mustFire: [],
         mustNotFire: ['R25'],
         expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R25-anonymous-scriptblock.ps1'),
+        label: 'probe-R25-anonymous-scriptblock',
+        // DOCUMENTED LIMITATION ANCHOR (v0.3.1): $body = ... inside an
+        // anonymous scriptblock literal `$sb = { ... }` at script scope.
+        // computeFunctionBodyRanges tracks only NAMED `function NAME { ... }`
+        // declarations, not anonymous scriptblocks, so R25 fires here even
+        // though the runtime scope is function-local. This probe asserts the
+        // GAP HOLDS so any future widening of the scope tracker surfaces as
+        // a probe FAILURE, forcing an explicit policy decision (per gate
+        // protocol in feedback_dataverse_linter_gate.md). See README "Known
+        // limitations" section and the R25 section header above for the
+        // documented contract.
+        mustFire: ['R25'],
+        mustNotFire: [],
+        expectClean: false,
+        exactFireCount: { 'R25': 1 }
     }
 ];
 
