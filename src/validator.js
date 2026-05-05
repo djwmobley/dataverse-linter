@@ -87,8 +87,46 @@ function validate(extraction) {
             }
         }
 
+        // requires_present (v0.4.2): a precondition guard. The rule applies
+        // only when the requires_present regex matches normalizedContent.
+        // Mirror semantics of requires_absent but inverted: if requires_present
+        // is set and does NOT match, the rule is skipped entirely.
+        //
+        // Rationale (PR #4 -- round-1 known limitation on R28): a regex-inverse
+        // rule with no precondition fires on any file that lacks the inverse
+        // pattern, even files that have nothing the rule is meant to guard.
+        // R28 specifically: a single-line `pwsh -Command "Get-Date"` snippet
+        // trips R28 because the snippet has no idempotency guard -- but it
+        // also has no Web API mutation calls to guard. requires_present lets
+        // a rule say "only apply this rule if the file actually does the
+        // thing being guarded." For R28 the thing being guarded is a
+        // Dataverse Web API mutation call (POST/PATCH/PUT per the create
+        // and update-delete Web API substrate pages on MS Learn).
+        //
+        // requires_present is INTENT detection, not bypass prevention.
+        // It uses normalizedContent (strippedContent with backtick line
+        // continuations collapsed) so that a mutation call with a quoted
+        // method literal (`-Method "POST"`) is correctly recognized --
+        // noCommentNoStringContent strips string contents, turning
+        // `-Method "POST"` into `-Method ""`, which does not match the
+        // method alternation and produces a silent false skip.
+        // Line comments are excluded from normalizedContent (they are
+        // stripped via strippedContent), so a mutation-shaped string inside
+        // a line comment does not force the rule to apply.
+        // Block comments are NOT stripped from this view; if a future use
+        // case demands block-comment exclusion for requires_present, switch
+        // to a normalized-rawContentNoBlockComments hybrid then.
+        let requiresPresentSatisfied = true;
+        if (rule.requires_present) {
+            const presentRe = new RegExp(rule.requires_present, "m");
+            if (!presentRe.test(normalizedContent)) {
+                requiresPresentSatisfied = false;
+            }
+        }
+
         if (rule.type === "regex" && rule.pattern) {
             if (!requiresAbsentSatisfied) return; // guard present -> rule suppressed
+            if (!requiresPresentSatisfied) return; // precondition absent -> rule does not apply
             const regex = new RegExp(rule.pattern, "gm");
             let match;
             while ((match = regex.exec(targetContent)) !== null) {
@@ -105,6 +143,7 @@ function validate(extraction) {
 
         if (rule.type === "regex-template" && rule.pattern) {
             if (!requiresAbsentSatisfied) return; // guard present -> rule suppressed
+            if (!requiresPresentSatisfied) return; // precondition absent -> rule does not apply
             if (!rule.variables || rule.variables.length === 0) {
                 process.stderr.write(`[validator] regex-template rule ${rule.id} has no variables; skipping\n`);
             } else {
@@ -125,6 +164,7 @@ function validate(extraction) {
         }
 
         if (rule.type === "regex-inverse" && rule.pattern) {
+            if (!requiresPresentSatisfied) return; // precondition absent -> rule does not apply
             const regex = new RegExp(rule.pattern, "gm");
             if (!regex.test(targetContent)) {
                 errors.push({
@@ -147,13 +187,30 @@ function validate(extraction) {
         if (!req.import_pattern || !req.requires_directives || req.requires_directives.length === 0) return;
         const importRegex = new RegExp(req.import_pattern, "gm");
         if (importRegex.test(strippedContent)) {
-            // Module is imported. Verify all required directives are present in rawContent.
-            // rawContent is used for the directive check: #Requires directives are comments
-            // and would be stripped by stripComments(), so we must check rawContent here.
+            // Module is imported. Verify all required directives are present.
+            // The directive check uses rawContentNoBlockComments (NOT rawContent).
+            //
+            // Rationale (v0.4.2, round-3 reviewer of PR #3): a `#Requires` lexeme
+            // nested inside a `<# ... #>` block comment is NOT honored by
+            // PowerShell at parse time -- per about_Requires ("Each `#Requires`
+            // statement must be the first item on a line") and about_Comments
+            // ("All text within the block is treated as part of the same
+            // comment"). Testing the directive presence against rawContent
+            // matched a comment-internal lexeme and suppressed
+            // module-env-mismatch even though the script would still fail
+            // under pwsh 7. The fix is structurally identical to the v0.4.1
+            // fix on the requires_absent path (R12) -- both need to test
+            // against the block-comment-stripped view because PowerShell
+            // honors line-comment `#Requires` directives but not
+            // block-comment-nested ones.
+            //
+            // Line-comment `#Requires -PSEdition Desktop` directives remain
+            // visible in rawContentNoBlockComments because stripBlockComments
+            // only blanks `<# ... #>` ranges, not line-comment text.
             const missing = req.requires_directives.filter(directive => {
                 const escaped = directive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const directiveRegex = new RegExp("^" + escaped, "m");
-                return !directiveRegex.test(rawContent);
+                return !directiveRegex.test(rawContentNoBlockComments);
             });
             if (missing.length > 0) {
                 errors.push({
