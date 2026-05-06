@@ -1050,24 +1050,118 @@ const probes = [
         mustNotFire: ['R37'],
         expectClean: false
     },
+    // NOTE: probe-R37-N3-select-not-filter.ps1 (v0.4.3 negative anchor) is RETIRED.
+    // In v0.4.3 R37 did not fire on $select usage. In v0.4.4 Gap 1 widening, R37
+    // now fires on $select=appmoduleidunique against appmodulecomponents. The file
+    // is preserved for historical traceability but is not registered here.
+
     {
-        file: path.join(__dirname, 'probe-R37-N3-select-not-filter.ps1'),
-        label: 'probe-R37-N3-select-not-filter',
-        // Negative probe: Lookup logicalname in $select, not $filter.
-        // $select=appmoduleidunique is a valid column selection. The R37 pattern
-        // anchors on '$filter=...<name> eq'; $select usage does not match.
-        // R37 MUST NOT fire.
+        file: path.join(__dirname, 'probe-R37-N4-expand-not-filter.ps1'),
+        label: 'probe-R37-N4-expand-not-filter',
+        // Negative probe (retained from v0.4.3): navigation property name in $expand.
+        // $expand=appmoduleid($select=name) uses navigation property 'appmoduleid'
+        // (not 'appmoduleidunique'). R37 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: false
+    },
+
+    // =========================================================================
+    // R37 Gap 1 probes (v0.4.4): bare Lookup logicalname in $select
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R37-P3-select-bare-lookup.ps1'),
+        label: 'probe-R37-P3-select-bare-lookup',
+        // Positive probe (Gap 1): appmoduleidunique in $select against appmodulecomponents.
+        // appmoduleidunique on appmodulecomponent is Type=Lookup. Bare Lookup name in
+        // $select produces 0x80060888 at runtime. R37 MUST fire.
+        mustFire: ['R37'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-P4-select-middle-position.ps1'),
+        label: 'probe-R37-P4-select-middle-position',
+        // Positive probe (Gap 1): appmoduleidunique in middle of $select list.
+        // R37 must detect the Lookup name regardless of its position in the comma list.
+        // R37 MUST fire.
+        mustFire: ['R37'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N5-appmodules-uniqueidentifier.ps1'),
+        label: 'probe-R37-N5-appmodules-uniqueidentifier',
+        // Negative probe (Gap 1 false-positive guard): appmoduleidunique in $select
+        // against the appmodules EntitySet. On appmodule, appmoduleidunique is
+        // Type=Uniqueidentifier, not a Lookup. R37 $select pattern is anchored to
+        // 'appmodulecomponents' only. R37 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N6-pk-in-select.ps1'),
+        label: 'probe-R37-N6-pk-in-select',
+        // Negative probe (Gap 1 false-positive guard): appmodulecomponentid (PK,
+        // Type=Uniqueidentifier) in $select against appmodulecomponents. PK not in
+        // R37 watch list. R37 MUST NOT fire.
+        // Note: R25 fires on the $endpoint script-scope assignment -- unrelated to R37.
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: false
+    },
+
+    // =========================================================================
+    // R37 Gap 2 probes (v0.4.4): multi-line '+' concat line-straddling detection
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R37-P5-multiline-concat-filter.ps1'),
+        label: 'probe-R37-P5-multiline-concat-filter',
+        // Positive probe (Gap 2): $filter=...appmoduleidunique eq straddles '+' boundary.
+        // joinPlusContent view collapses the two string operands into one line so the
+        // bare Lookup name pattern is detected. R37 MUST fire.
+        mustFire: ['R37'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-P6-multiline-concat-select.ps1'),
+        label: 'probe-R37-P6-multiline-concat-select',
+        // Positive probe (Gap 1 + Gap 2 combined): $select=...,appmoduleidunique straddles
+        // '+' boundary against appmodulecomponents. After joinPlusContent joins the lines,
+        // the $select arm of R37 fires. R37 MUST fire.
+        mustFire: ['R37'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N7-multiline-concat-correct.ps1'),
+        label: 'probe-R37-N7-multiline-concat-correct',
+        // Negative probe (Gap 2 regression anchor): multi-line '+' concat with correct
+        // _appmoduleidunique_value form. After joining, leading '_' breaks \b before
+        // 'appmoduleidunique'. R37 MUST NOT fire. Script is clean (exit 0).
+        mustFire: [],
+        mustNotFire: ['R37'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R37-N8-expand-nav-prop.ps1'),
+        label: 'probe-R37-N8-expand-nav-prop',
+        // Negative probe (regression anchor for $expand): navigation property 'appmoduleid'
+        // in $expand. 'appmoduleid' is not in the watch list; 'appmoduleidunique' does not
+        // appear. R37 MUST NOT fire.
         mustFire: [],
         mustNotFire: ['R37'],
         expectClean: false
     },
     {
-        file: path.join(__dirname, 'probe-R37-N4-expand-not-filter.ps1'),
-        label: 'probe-R37-N4-expand-not-filter',
-        // Negative probe: navigation property name in $expand.
-        // $expand=appmoduleid($select=name) uses the ReferencingEntityNavigationPropertyName
-        // 'appmoduleid' (not 'appmoduleidunique'). Neither name followed by ' eq' appears
-        // in a $filter clause. R37 MUST NOT fire.
+        file: path.join(__dirname, 'probe-R37-N9-backtick-continuation-not-concat.ps1'),
+        label: 'probe-R37-N9-backtick-continuation-not-concat',
+        // Negative probe (Gap 2 boundary): PowerShell backtick statement-continuation
+        // is NOT string '+' concatenation. joinPlusContent's pattern requires an adjacent
+        // closing quote, '+', newline, and opening quote. A bare backtick at EOL does
+        // not match this pattern. URL contains correct _value form. R37 MUST NOT fire.
         mustFire: [],
         mustNotFire: ['R37'],
         expectClean: false

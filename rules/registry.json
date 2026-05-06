@@ -159,14 +159,15 @@
   },
   {
     "id": "R37",
-    "title": "OData $filter on Lookup attribute uses bare logicalname instead of _<logicalname>_value",
+    "title": "OData $filter or $select on Lookup attribute uses bare logicalname instead of _<logicalname>_value",
     "severity": "ERROR",
     "type": "regex-template",
-    "pattern": "(?:^|`)\\$filter=[^\"'\\n]*\\b(${variables})\\b\\s+eq\\b",
+    "content_view": "joinPlusContent",
+    "pattern": "(?:(?:^|`)\\$filter=[^\"'\\n]*\\b(${variables})\\b\\s+eq\\b|appmodulecomponents[^\"'\\n]*\\$select=[^\"'\\n]*\\b(${variables})\\b)",
     "variables": [
       "appmoduleidunique"
     ],
-    "message": "OData $filter equality on a Lookup attribute must use the '_<logicalname>_value' form (e.g., _appmoduleidunique_value eq <guid>), not the bare logicalname. The bare logicalname is a navigation property for $expand; using it in $filter produces error 0x80060888 'Could not find a property named <name>'. Implementation note: the variable list uses hard-coded known Lookup logicalnames; extend via 'node src/rule-manager.js set-variables R37 <name1> <name2> ...'. Substrate citations: (1) appmodulecomponent.appmoduleidunique Type=Lookup, Targets=appmodule -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent; (2) OData Lookup filter pattern _<logicalname>_value -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows (section: 'Filter on lookup property', example: $filter=_owninguser_value eq <systemuserid value>).",
+    "message": "OData $filter equality or $select on a Lookup attribute must use the '_<logicalname>_value' form (e.g., _appmoduleidunique_value), not the bare logicalname. For $filter: bare logicalname produces 0x80060888 'Could not find a property named <name>'. For $select against appmodulecomponents: bare logicalname is a navigation property, not a selectable scalar; Dataverse returns 0x80060888 for $select too. Correct $filter form: _appmoduleidunique_value eq <guid>. Correct $select form: _appmoduleidunique_value. The $select pattern is anchored to the appmodulecomponents EntitySet to avoid false positives on appmodule.appmoduleidunique (Type=Uniqueidentifier on the appmodule entity itself). This rule also detects bare Lookup names that straddle PowerShell '+'-concatenation line boundaries (joinPlusContent view collapses them before matching). Implementation note: extend the variable list via 'node src/rule-manager.js set-variables R37 <name1> <name2> ...'. Substrate citations: (1) appmodulecomponent.appmoduleidunique Type=Lookup, Targets=appmodule -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent; (2) OData Lookup _<logicalname>_value filter form -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows (section: 'Filter on lookup property', example: $filter=_owninguser_value eq <systemuserid value>); (3) OData $select Lookup property form -- https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns (Lookup property data section: use $select with _<logicalname>_value, not bare logicalname).",
     "enabled": true
   }
 ]

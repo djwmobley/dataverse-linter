@@ -146,7 +146,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R34 | regex | ERROR | `pac install` usage; `install` is not a recognized pac command group. The closest valid surface is `pac application install --environment-id <id> --application-name <name>`. See: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/ |
 | R35 | regex | ERROR | `[Parser]::ParseFile($p, [ref]$null, [ref]$null)` with both output arguments as `[ref]$null`; silently discards all parsed tokens and all parse errors. See: https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.language.parser.parsefile |
 | R36 | regex | ERROR | `[datetime]::TryParse($s, [ref]$null)` 2-argument form with `[ref]$null`; the parsed `DateTime` value is unreachable, and on .NET 7+ the call may resolve to a different overload and fail. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse |
-| R37 | regex-template | ERROR | OData `$filter` equality on a Lookup attribute uses the bare logicalname (e.g., `appmoduleidunique eq <guid>`) instead of the required `_<logicalname>_value` form (e.g., `_appmoduleidunique_value eq <guid>`). The bare logicalname is a navigation property usable in `$expand`, not a filterable scalar property; using it in `$filter` produces `0x80060888 Could not find a property named '<name>'`. Implementation: hard-coded list of known Lookup logicalnames (seeded: `appmoduleidunique`); extend via `node src/rule-manager.js set-variables R37 <name1> ...`. Substrate: (1) https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent — `appmoduleidunique` Type=Lookup, Targets=appmodule; (2) https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows — `$filter=_owninguser_value eq <systemuserid value>` (Lookup filter pattern). |
+| R37 | regex-template (`joinPlusContent` view) | ERROR | OData `$filter` equality or `$select` on a Lookup attribute uses the bare logicalname (e.g., `appmoduleidunique eq <guid>` in `$filter`, or `$select=...,appmoduleidunique` against `appmodulecomponents`) instead of the required `_<logicalname>_value` form. The bare logicalname is a navigation property for `$expand` only; using it in `$filter` or `$select` produces `0x80060888 Could not find a property named '<name>'`. v0.4.4 widening adds `$select` detection (Gap 1) anchored to the `appmodulecomponents` EntitySet, and detects patterns that straddle PowerShell `+`-concat line boundaries via the `joinPlusContent` content view (Gap 2). Implementation: hard-coded list of known Lookup logicalnames (seeded: `appmoduleidunique`); extend via `node src/rule-manager.js set-variables R37 <name1> ...`. Substrate: (1) https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent — `appmoduleidunique` Type=Lookup, Targets=appmodule; (2) https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows — Lookup `$filter` pattern; (3) https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns — Lookup `$select` pattern (use `_<logicalname>_value`). |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
@@ -345,30 +345,39 @@ Source: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse
 - **Case-sensitivity gap:** The pattern anchors on `\[datetime\]` (lowercase). PowerShell type accelerators are case-insensitive, so `[DateTime]::TryParse` (capital D) is identical at runtime but is not caught by R36. See `probe-R36-capitalized-type.ps1`.
 - **3-argument form not flagged:** `[datetime]::TryParse($s, $provider, [ref]$dt)` with a real bound `$dt` variable is the correct 3-argument form and is not flagged. R36 scope is strictly the 2-argument form where the second arg is `[ref]$null`. See `probe-R36-three-arg-form.ps1`.
 
-### R37 — OData `$filter` equality on a Lookup attribute uses bare logicalname
+### R37 — OData `$filter` or `$select` on a Lookup attribute uses bare logicalname (v0.4.4 widening)
 
-The Dataverse Web API represents Lookup attribute values in query results via an `_<logicalname>_value` annotation (e.g., `_appmoduleidunique_value`). This annotation holds the raw GUID of the referenced record and is the form that must be used in `$filter` equality expressions. The bare logicalname (e.g., `appmoduleidunique`) is a navigation property name used in `$expand` to follow the relationship and retrieve related record data; it is not a filterable scalar property.
+The Dataverse Web API represents Lookup attribute values via an `_<logicalname>_value` annotation (e.g., `_appmoduleidunique_value`). This annotation holds the raw GUID of the referenced record. It is the form that must be used in both `$filter` equality expressions and `$select` column lists. The bare logicalname (e.g., `appmoduleidunique`) is a navigation property name for `$expand`; it is not a queryable scalar property.
 
-Using the bare logicalname in `$filter` produces:
+Using the bare logicalname in `$filter` OR `$select` produces:
 
 ```
 0x80060888 — Could not find a property named 'appmoduleidunique' on type 'Microsoft.Dynamics.CRM.appmodulecomponent'
 ```
 
-The correct form: `appmodulecomponents?$filter=_appmoduleidunique_value eq <guid>`.
-
-This failure mode generalizes to any Lookup attribute across any Dataverse entity: any `$filter` equality comparison against a Lookup column must use `_<logicalname>_value`, not the bare logicalname.
+Correct forms:
+- `$filter`: `appmodulecomponents?$filter=_appmoduleidunique_value eq <guid>`
+- `$select`: `appmodulecomponents?$select=objectid,_appmoduleidunique_value`
 
 **Substrate citations:**
 
 - `appmodulecomponent.appmoduleidunique` Type=Lookup, Targets=appmodule: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 - OData Lookup filter pattern — section "Filter on lookup property", example `$filter=_owninguser_value eq <systemuserid value>`: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows
+- OData Lookup `$select` pattern — "Lookup property data" section: single-valued navigation properties cannot be used in `$select`; use `_<logicalname>_value` instead: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns
 
-**Implementation:**
+**Implementation (v0.4.4):**
 
-R37 is a `regex-template` rule. The pattern detects `$filter=...<name> eq` where `<name>` matches one of the configured Lookup logicalnames. The `\b` word boundary before the logicalname ensures that `_appmoduleidunique_value eq` does NOT match: since `_` is a word character (`\w`), there is no word boundary between `_` and `a`, so `\bappmoduleidunique\b` fails to match within `_appmoduleidunique_value`. This makes the word boundary the sole mechanism that distinguishes the correct `_value` form from the bare logicalname — no negative lookbehind is needed.
+R37 is a `regex-template` rule operating on the `joinPlusContent` content view (v0.4.4 addition). The view collapses PowerShell `+`-based string concatenation across line boundaries into single logical strings before matching. This closes the Gap 2 structural limitation noted in PR #5 review: patterns straddling a `+` concat boundary were invisible to `strippedContent`-based matching.
 
-The watch list is seeded with `appmoduleidunique` (the bug trigger). Extend it via:
+The pattern has two arms:
+
+1. **`$filter` arm** (`$filter=...<name> eq`): detects bare Lookup logicalnames in filter equality expressions. The `\b` word boundary before the logicalname ensures `_appmoduleidunique_value eq` does NOT match (`_` is `\w`, so no boundary exists before `a`).
+
+2. **`$select` arm** (`appmodulecomponents...$select=...<name>`): detects bare Lookup logicalnames in `$select` column lists. This arm is **EntitySet-anchored** to `appmodulecomponents` to avoid false positives on `appmodule.appmoduleidunique` (Type=Uniqueidentifier on the `appmodule` entity; the same logicalname refers to different types on different entities). Without the anchor, querying `appmodules?$select=appmoduleid,appmoduleidunique,...` would false-positive even though `appmoduleidunique` is a valid Uniqueidentifier column on `appmodule`.
+
+The `joinPlusContent` view (v0.4.4, `src/extractor.js`): collapses adjacent double- or single-quoted string literals joined by `+` across line boundaries by removing the `+` and the newline. Iteration repeats until no more joins are possible (handles chains). Backtick statement-continuations (`` ` `` at EOL without `+` and adjacent quote) are NOT collapsed (different pattern). Variable interpolation inside strings is preserved intact.
+
+The watch list is seeded with `appmoduleidunique`. Extend it via:
 
 ```
 node src/rule-manager.js set-variables R37 appmoduleidunique <additional_lookup_name> ...
@@ -377,23 +386,35 @@ node src/rule-manager.js set-variables R37 appmoduleidunique <additional_lookup_
 **False-positive guardrails:**
 
 - `appmodulecomponentid eq <guid>` (PrimaryIdAttribute, Type=Uniqueidentifier) is NOT in the watch list. R37 does not fire on bare PK equality.
-- `$select=appmoduleidunique` does not contain `eq` following the logicalname in a `$filter=` context. R37 does not fire.
-- `$expand=appmoduleid(...)` uses the navigation property name `appmoduleid` (not `appmoduleidunique`), and no `eq` follows. R37 does not fire.
-- `_appmoduleidunique_value eq <guid>` — the `\b` before `appmoduleidunique` fails because `_` is `\w`. R37 does not fire.
+- `$select=_appmoduleidunique_value` — leading `_` breaks `\b` before `appmoduleidunique`. R37 does not fire.
+- `$expand=appmoduleid(...)` uses the navigation property name `appmoduleid` (not `appmoduleidunique`). R37 does not fire.
+- `appmodules?$select=appmoduleid,appmoduleidunique,...` — the `$select` arm is anchored to `appmodulecomponents`; the `appmodules` EntitySet does not match. R37 does not fire.
+- Multi-line `+` concat with correct `_appmoduleidunique_value` form: after joining, `_` still breaks `\b`. R37 does not fire.
+- PowerShell backtick statement-continuation (`` ` `` at EOL, not `+`): `joinPlusContent` does not collapse backtick continuations. R37 does not fire unless the collapsed string contains the bare name.
 
-**Probes (v0.4.3):**
+**Probes (v0.4.4):**
 
-- `probe-R37-P1-bare-filter.ps1` — true positive: `$filter=appmoduleidunique eq <guid>`. Exact bug. R37 fires.
-- `probe-R37-P2-combined-predicate.ps1` — true positive: combined predicate `componenttype eq 62 and appmoduleidunique eq <guid>`. R37 detects the Lookup term anywhere in the `$filter` expression. R37 fires.
+- `probe-R37-P1-bare-filter.ps1` — true positive (v0.4.3): `$filter=appmoduleidunique eq <guid>`. Exact bug. R37 fires.
+- `probe-R37-P2-combined-predicate.ps1` — true positive (v0.4.3): combined predicate `componenttype eq 62 and appmoduleidunique eq <guid>`. R37 fires.
+- `probe-R37-P3-select-bare-lookup.ps1` — true positive (v0.4.4 Gap 1): `$select=objectid,componenttype,appmoduleidunique` against `appmodulecomponents`. R37 fires.
+- `probe-R37-P4-select-middle-position.ps1` — true positive (v0.4.4 Gap 1): bare Lookup name in middle of `$select` list against `appmodulecomponents`. R37 fires.
+- `probe-R37-P5-multiline-concat-filter.ps1` — true positive (v0.4.4 Gap 2): `$filter=...appmoduleidunique eq` straddles a `+` line boundary. After `joinPlusContent` joining, R37 fires.
+- `probe-R37-P6-multiline-concat-select.ps1` — true positive (v0.4.4 Gap 1 + Gap 2): `$select=...,appmoduleidunique` against `appmodulecomponents` straddles a `+` line boundary. After joining, R37 fires.
 - `probe-R37-N1-correct-value-form.ps1` — true negative (clean-path anchor): `$filter=_appmoduleidunique_value eq <guid>`. Correct form. R37 does NOT fire.
-- `probe-R37-N2-pk-equality.ps1` — true negative: `$filter=appmodulecomponentid eq <guid>`. PrimaryIdAttribute (Uniqueidentifier, not Lookup), not in watch list. R37 does NOT fire.
-- `probe-R37-N3-select-not-filter.ps1` — true negative: `$select=objectid,componenttype,appmoduleidunique`. Logicalname in `$select` clause, not in `$filter`. R37 does NOT fire.
-- `probe-R37-N4-expand-not-filter.ps1` — true negative: `$expand=appmoduleid($select=name)`. Navigation property name in `$expand`, no `eq` in `$filter` context. R37 does NOT fire.
+- `probe-R37-N2-pk-equality.ps1` — true negative: `$filter=appmodulecomponentid eq <guid>`. PK (Uniqueidentifier), not in watch list. R37 does NOT fire.
+- `probe-R37-N3-select-not-filter.ps1` — RETIRED (v0.4.4). Was a v0.4.3 negative anchor for `$select` not firing; now fires. File preserved for historical traceability; NOT registered in run-battery.js.
+- `probe-R37-N4-expand-not-filter.ps1` — true negative: `$expand=appmoduleid($select=name)`. Navigation prop; `appmoduleidunique` not present. R37 does NOT fire.
+- `probe-R37-N5-appmodules-uniqueidentifier.ps1` — true negative (v0.4.4 Gap 1 entity-anchor guard): `appmodules?$select=appmoduleid,appmoduleidunique,...`. `appmodule.appmoduleidunique` is Type=Uniqueidentifier; `$select` arm anchored to `appmodulecomponents` only. R37 does NOT fire.
+- `probe-R37-N6-pk-in-select.ps1` — true negative (v0.4.4 Gap 1): `$select=appmodulecomponentid,objectid`. PK not in watch list. R37 does NOT fire.
+- `probe-R37-N7-multiline-concat-correct.ps1` — true negative (v0.4.4 Gap 2 regression anchor): multi-line `+` concat with correct `_appmoduleidunique_value` form. After joining, `_` breaks `\b`. R37 does NOT fire.
+- `probe-R37-N8-expand-nav-prop.ps1` — true negative: `$expand=appmoduleid(...)`. Navigation prop; watch-list name absent. R37 does NOT fire.
+- `probe-R37-N9-backtick-continuation-not-concat.ps1` — true negative (v0.4.4 Gap 2 boundary): backtick statement-continuation; `joinPlusContent` does not collapse it. Correct `_value` form in URL. R37 does NOT fire.
 
 **Known limitations:**
 
-- **Watch-list scope:** R37 only fires for Lookup logicalnames explicitly listed in `rules/registry.json` under R37's `variables` array. A Lookup attribute not in the list (e.g., `regardingobjectid`, `ownerid` on other entities) will not be caught. The rule is intentionally conservative: a hard-coded list has zero false positives for unlisted names; a broad heuristic (matching any `\w+id\b eq`) would catch more cases but risks false positives on Uniqueidentifier attributes whose logicalname happens to end in `id` (e.g., `parentaccountid` where both the bare form and the `_value` form may appear in different contexts). Authors should extend the list as new Lookup filter bugs are encountered.
-- **Pattern matched in `strippedContent`:** Full-line `#` comment text is stripped; `appmoduleidunique eq` in a full-line comment does not fire. Inline comments after code are retained in `strippedContent`; a trailing inline comment containing the pattern could false-positive, though this is an unlikely case for a Dataverse API URL fragment.
+- **Watch-list scope:** R37 only fires for Lookup logicalnames explicitly listed in `rules/registry.json` under R37's `variables` array. Lookup attributes on other entities (e.g., `regardingobjectid`, `ownerid`) are not caught unless added to the list. The intentionally conservative hard-coded approach has zero false positives for unlisted names. Extend as new Lookup filter or select bugs are encountered.
+- **`$select` arm EntitySet-scoped:** The `$select` detection is anchored to `appmodulecomponents` to resolve the entity-context ambiguity (`appmoduleidunique` is Uniqueidentifier on `appmodule`, Lookup on `appmodulecomponent`). A `$select` against a different EntitySet that happens to list a Lookup name not in the watch list will not fire. This is an accepted trade-off of the hard-coded-list approach.
+- **Pattern matched in `joinPlusContent`:** Full-line `#` comment text is stripped (via `strippedContent` base before joining). Inline comments after code are retained; a trailing inline comment containing the pattern could false-positive, though unlikely for a Dataverse API URL fragment.
 
 ### module-env-mismatch — module imported without required runtime directive
 
@@ -651,7 +672,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **81 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the round-2 SHOWSTOPPER fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the round-3 fix; and the v0.4.3 R37 OData Lookup filter probes (P1-bare-filter / P2-combined-predicate / N1-correct-value-form / N2-pk-equality / N3-select-not-filter / N4-expand-not-filter) that pin the Lookup `_value` annotation requirement and its false-positive guardrails.
+- **89 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry; N3-select-not-filter retired from negative to historical marker in v0.4.4) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the round-2 SHOWSTOPPER fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the round-3 fix; and the v0.4.4 R37 OData Lookup filter/select probes (P1-bare-filter / P2-combined-predicate / P3-select-bare-lookup / P4-select-middle-position / P5-multiline-concat-filter / P6-multiline-concat-select / N1-correct-value-form / N2-pk-equality / N4-expand-not-filter / N5-appmodules-uniqueidentifier / N6-pk-in-select / N7-multiline-concat-correct / N8-expand-nav-prop / N9-backtick-continuation-not-concat) that pin the widened Lookup detection covering `$filter`, `$select`, multi-line `+`-concat boundaries, and the entity-anchor false-positive guard.
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.

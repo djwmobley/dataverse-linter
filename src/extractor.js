@@ -62,6 +62,73 @@ function stripBlockComments(content) {
 }
 
 /**
+ * Produce a content view that collapses PowerShell `+`-based string concatenation
+ * across line boundaries into single logical lines. Used by R37 and any future rule
+ * that needs to detect patterns spanning adjacent string operands joined by `+`.
+ *
+ * Input: strippedContent (full-line # comments already removed).
+ *
+ * Algorithm: repeatedly collapse adjacent quoted-string segments joined by `+`
+ * where the `+` may be at the end of one line and the next segment at the start of
+ * the following line (with optional leading whitespace). Only direct string-literal
+ * concatenation (`"a" + "b"` or `"a" +\n    "b"`) is collapsed; PowerShell
+ * backtick line-continuations (`` ` `` at end of line) are a different mechanism
+ * and must NOT be collapsed here (they are handled separately by normalizedContent).
+ *
+ * Edge cases handled:
+ *   - Both double-quoted and single-quoted string segments.
+ *   - Backtick-escaped characters inside double-quoted strings (preserved intact).
+ *   - Multiple `+` operands on one line: collapsed left-to-right in a single pass.
+ *   - Block comments within concatenation: should already be stripped by
+ *     strippedBlockComments step upstream; this function operates on strippedContent.
+ *   - Variable interpolation `$x` inside strings: preserved intact (joining is
+ *     string-literal boundary collapsing only; interpolated content is untouched).
+ *
+ * NOT collapsed:
+ *   - `+` between non-string expressions (e.g., `$a + $b`): the regex requires
+ *     a closing quote on the left operand and an opening quote on the right operand.
+ *   - Backtick statement-continuation at end of line: that is `\` ` at EOL with no
+ *     `+` present; not matched by this function.
+ *
+ * Architecture note (v0.4.4): This is a framework content view, not a rule-specific
+ * shim. Rules opt in via `"content_view": "joinPlusContent"` in the registry entry.
+ * Lower blast radius than a blanket default change; higher reusability than a shim.
+ * R13 is NOT retrofitted in this PR (separate scope).
+ *
+ * Substrate citation for why this is needed:
+ *   Dataverse Web API OData query correctness (filter-rows, select-columns):
+ *   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows
+ *   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns
+ *   The canonical AdvAccel multi-line idiom splits an OData URL across two string
+ *   literals joined by `+`; each line alone is innocent, but the joined URL contains
+ *   a bare Lookup logicalname that fails at runtime. strippedContent sees each line
+ *   separately; joinPlusContent joins them for whole-URL analysis.
+ */
+function buildJoinPlusContent(strippedContent) {
+    // Regex: match the end of a double- or single-quoted string literal, optional
+    // whitespace, then `+`, then optional whitespace and a newline, then optional
+    // leading whitespace, then the opening quote of the next string literal.
+    // Replace with: close-of-first + open-of-second (no `+` or newline in result),
+    // effectively merging the two string literals.
+    //
+    // Pattern explanation:
+    //   (["'])   — close-quote of left operand (captured as group 1)
+    //   \s*\+\s* — the `+` operator with optional surrounding whitespace
+    //   \r?\n    — the line boundary
+    //   \s*      — optional leading whitespace on next line
+    //   \1       — open-quote of right operand (same quote type as left)
+    //
+    // We iterate until no more matches (handles chains of 3+ operands).
+    let result = strippedContent;
+    let prev;
+    do {
+        prev = result;
+        result = result.replace(/(["'])\s*\+\s*\r?\n\s*\1/g, '');
+    } while (result !== prev);
+    return result;
+}
+
+/**
  * Produce a derivation of content with block comments, string literals, and inline
  * comments removed. Used exclusively for regex-inverse rules (R28) so that
  * bypass text hidden in comments or strings cannot satisfy a pattern that should only
@@ -287,6 +354,11 @@ function extract(filePath) {
     // NOT treated as an active guard (matching PS parser behavior). See
     // stripBlockComments() docstring for substrate citations and rationale.
     const rawContentNoBlockComments = stripBlockComments(content);
+    // v0.4.4: fourth content view. strippedContent with PowerShell `+`-based
+    // string concatenation across line boundaries collapsed into single lines.
+    // Rules opt in via content_view: "joinPlusContent" in their registry entry.
+    // See buildJoinPlusContent() docstring for rationale and edge-case handling.
+    const joinPlusContent = buildJoinPlusContent(strippedContent);
     // Compute function-body ranges against rawContent. stripComments now preserves
     // length (replaces matched chars with spaces so newlines and offsets align), so
     // ranges computed against rawContent are valid for matches whose index is
@@ -328,7 +400,7 @@ function extract(filePath) {
         }
     }
 
-    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, functionBodyRanges, filePath };
+    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, joinPlusContent, functionBodyRanges, filePath };
 }
 
-module.exports = { extract, computeFunctionBodyRanges, isInsideAnyRange, stripBlockComments };
+module.exports = { extract, computeFunctionBodyRanges, isInsideAnyRange, stripBlockComments, buildJoinPlusContent };

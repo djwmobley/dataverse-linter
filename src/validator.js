@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 function validate(extraction) {
-    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, functionBodyRanges, filePath } = extraction;
+    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, joinPlusContent, functionBodyRanges, filePath } = extraction;
     const errors = [...(parseErrors || [])];
 
     // Helper: returns true if `idx` lies strictly inside any [start, end) range.
@@ -45,14 +45,23 @@ function validate(extraction) {
     registry.forEach(rule => {
         if (!rule.enabled) return;
 
-        // regex-inverse rules must use the comment- and string-stripped derivation so
-        // that bypass text hidden in comments or string literals cannot satisfy them.
-        // regex rules (R24, R21) use normalized content; all other regex rules use strippedContent.
+        // Content-view selection for regex / regex-template rules:
+        //   regex-inverse: noCommentNoStringContent (bypass-safe; comment/string contents stripped)
+        //   R24, R21:      normalizedContent (backtick-continuation collapsed for multi-line pac calls)
+        //   content_view: "joinPlusContent" (v0.4.4): strippedContent with `+`-concat
+        //       lines joined; used by R37 to catch bare Lookup names that straddle
+        //       `+` line boundaries in multi-line string concatenations.
+        //   default:       strippedContent
+        //
+        // Note: content_view field is only honored for regex and regex-template types.
+        // regex-inverse always uses noCommentNoStringContent regardless of content_view.
         let targetContent;
         if (rule.type === "regex-inverse") {
             targetContent = noCommentNoStringContent;
         } else if (rule.id === "R24" || rule.id === "R21") {
             targetContent = normalizedContent;
+        } else if (rule.content_view === "joinPlusContent") {
+            targetContent = joinPlusContent;
         } else {
             targetContent = strippedContent;
         }
