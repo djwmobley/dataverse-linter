@@ -82,7 +82,7 @@ console.log("Running Fail Battery...");
             const knownValidRules = [
                 ...expectedRules,
                 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch',
-                'R32', 'R33', 'R34', 'R35', 'R36'
+                'R32', 'R33', 'R34', 'R35', 'R36', 'R37', 'R38'
             ];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
@@ -978,6 +978,110 @@ const probes = [
         // (its guard accepts -PSEdition Desktop).
         mustFire: [],
         mustNotFire: ['module-env-mismatch', 'R12'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R38 -- Manual [switch]$WhatIf parameter (manual WhatIf antipattern)
+    // A manual [switch]$WhatIf bypasses PowerShell's CommonParameter injection:
+    // it does not set $WhatIfPreference for called cmdlets, does not wire
+    // -Confirm, and does not force destructive code through
+    // $PSCmdlet.ShouldProcess() -- leaving side-effects free to fire
+    // regardless of WhatIf intent.
+    // The rule fires when [switch]$WhatIf is present AND SupportsShouldProcess
+    // (without =$false) is absent from the enclosing script/function.
+    //
+    // Citations:
+    //   - https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_cmdletbindingattribute
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_advanced_methods
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R38-no-cmdletbinding.ps1'),
+        label: 'probe-R38-no-cmdletbinding',
+        // Probe 1: param([switch]$WhatIf) with no CmdletBinding at all.
+        // No SupportsShouldProcess present. R38 MUST fire.
+        mustFire: ['R38'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-function-no-cmdletbinding.ps1'),
+        label: 'probe-R38-function-no-cmdletbinding',
+        // Probe 2: function with param([switch]$WhatIf) and no CmdletBinding.
+        // R38 must fire on the function-level manual WhatIf switch.
+        mustFire: ['R38'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-param-decorator-no-suppress.ps1'),
+        label: 'probe-R38-param-decorator-no-suppress',
+        // Probe 3: [Parameter()] decorator on [switch]$WhatIf does not suppress.
+        // The rule anchors on [switch]$WhatIf regardless of [Parameter(...)] attributes.
+        // R38 MUST fire.
+        mustFire: ['R38'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-canonical-supportsshould.ps1'),
+        label: 'probe-R38-canonical-supportsshould',
+        // Probe 4: [CmdletBinding(SupportsShouldProcess=$true)] present.
+        // Canonical correct form. R38 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R38'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-no-whatif-param.ps1'),
+        label: 'probe-R38-no-whatif-param',
+        // Probe 5: script with no $WhatIf parameter of any kind.
+        // R38 pattern does not match. R38 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R38'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-cmdletbinding-no-supportsshould.ps1'),
+        label: 'probe-R38-cmdletbinding-no-supportsshould',
+        // Probe 6: [CmdletBinding()] without SupportsShouldProcess + [switch]$WhatIf.
+        // CmdletBinding alone does not wire ShouldProcess. R38 MUST fire.
+        mustFire: ['R38'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-bool-whatif-no-fire.ps1'),
+        label: 'probe-R38-bool-whatif-no-fire',
+        // Probe 7: [bool]$WhatIf -- different type from [switch].
+        // R38 anchors on [switch]\s*$WhatIf. [bool]$WhatIf is out of scope.
+        // R38 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R38'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-supportsshould-false.ps1'),
+        label: 'probe-R38-supportsshould-false',
+        // Probe 8 (antipattern variant): [CmdletBinding(SupportsShouldProcess=$false)]
+        // + [switch]$WhatIf. Explicit opt-out combined with manual switch.
+        // SupportsShouldProcess=$false does NOT satisfy the requires_absent guard
+        // (guard matches SupportsShouldProcess without the =$false suffix).
+        // R38 MUST fire.
+        mustFire: ['R38'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R38-supportsshould-bare.ps1'),
+        label: 'probe-R38-supportsshould-bare',
+        // Probe 9 (clean path, bare-name shorthand): [CmdletBinding(SupportsShouldProcess)]
+        // without =$true. PowerShell treats the bare named argument as =$true.
+        // The requires_absent guard regex matches SupportsShouldProcess followed by ),
+        // which is the bare-name form. R38 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R38'],
         expectClean: true
     }
 ];

@@ -146,6 +146,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R34 | regex | ERROR | `pac install` usage; `install` is not a recognized pac command group. The closest valid surface is `pac application install --environment-id <id> --application-name <name>`. See: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/ |
 | R35 | regex | ERROR | `[Parser]::ParseFile($p, [ref]$null, [ref]$null)` with both output arguments as `[ref]$null`; silently discards all parsed tokens and all parse errors. See: https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.language.parser.parsefile |
 | R36 | regex | ERROR | `[datetime]::TryParse($s, [ref]$null)` 2-argument form with `[ref]$null`; the parsed `DateTime` value is unreachable, and on .NET 7+ the call may resolve to a different overload and fail. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse |
+| R38 | regex (conjunction) | ERROR | Manual `[switch]$WhatIf` parameter without `[CmdletBinding(SupportsShouldProcess=$true)]`. A manual switch does not wire `$WhatIfPreference`, `-Confirm`, or `$PSCmdlet.ShouldProcess()` -- side-effects fire regardless of WhatIf intent. See: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
@@ -343,6 +344,41 @@ Source: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse
 
 - **Case-sensitivity gap:** The pattern anchors on `\[datetime\]` (lowercase). PowerShell type accelerators are case-insensitive, so `[DateTime]::TryParse` (capital D) is identical at runtime but is not caught by R36. See `probe-R36-capitalized-type.ps1`.
 - **3-argument form not flagged:** `[datetime]::TryParse($s, $provider, [ref]$dt)` with a real bound `$dt` variable is the correct 3-argument form and is not flagged. R36 scope is strictly the 2-argument form where the second arg is `[ref]$null`. See `probe-R36-three-arg-form.ps1`.
+
+### R38 -- Manual `[switch]$WhatIf` parameter (manual WhatIf antipattern)
+
+R38 fires when a `param(...)` block declares `[switch]$WhatIf` without `[CmdletBinding(SupportsShouldProcess=$true)]` on the enclosing script or function. A manual `[switch]$WhatIf` bypasses PowerShell's CommonParameter injection: it does not set `$WhatIfPreference` for called cmdlets, does not wire `-Confirm`, and does not force destructive code through `$PSCmdlet.ShouldProcess()` -- leaving prologue `throw` statements and other side-effects free to fire regardless of WhatIf intent. The canonical fix is to add `[CmdletBinding(SupportsShouldProcess=$true)]`, remove the manual switch, and gate all writes through `$PSCmdlet.ShouldProcess($target, $operation)`. Authority: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess and https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_cmdletbindingattribute.
+
+**Detection strategy:** Two-step conjunction using `requires_absent`. The main pattern `\[switch\]\s*\$WhatIf\b` fires on `strippedContent`. The `requires_absent` guard `SupportsShouldProcess\s*(?:=\s*\$true|\s*[,\)]|\s*$)` tests `rawContentNoBlockComments`: if `SupportsShouldProcess` is present with a non-false value (bare name, `=$true`, or followed by `,` or `)`), the guard is satisfied and the rule is suppressed. If `SupportsShouldProcess=$false` is present or `SupportsShouldProcess` is absent entirely, the guard is not satisfied and R38 fires.
+
+**Acceptable forms (rule suppressed):**
+
+- `[CmdletBinding(SupportsShouldProcess=$true)]` -- canonical
+- `[CmdletBinding(SupportsShouldProcess)]` -- bare-name shorthand (PS treats as `=$true`)
+- `[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact='High')]` -- with whitespace and additional args
+
+**Antipattern forms (rule fires):**
+
+- `param([switch]$WhatIf)` with no `CmdletBinding`
+- `[CmdletBinding()]` + `param([switch]$WhatIf)` -- `CmdletBinding` without `SupportsShouldProcess`
+- `[CmdletBinding(SupportsShouldProcess=$false)]` + `param([switch]$WhatIf)` -- explicit opt-out plus manual switch
+
+**Probes:**
+
+- `probe-R38-no-cmdletbinding.ps1` -- FIRE: no `CmdletBinding` at all
+- `probe-R38-function-no-cmdletbinding.ps1` -- FIRE: function body with manual `[switch]$WhatIf`, no `CmdletBinding`
+- `probe-R38-param-decorator-no-suppress.ps1` -- FIRE: `[Parameter()]` decorator does not suppress the rule
+- `probe-R38-canonical-supportsshould.ps1` -- NO FIRE: `[CmdletBinding(SupportsShouldProcess=$true)]` present
+- `probe-R38-no-whatif-param.ps1` -- NO FIRE: no `$WhatIf` parameter in script
+- `probe-R38-cmdletbinding-no-supportsshould.ps1` -- FIRE: `[CmdletBinding()]` without `SupportsShouldProcess`
+- `probe-R38-bool-whatif-no-fire.ps1` -- NO FIRE: `[bool]$WhatIf` is a different type; rule anchors on `[switch]`
+- `probe-R38-supportsshould-false.ps1` -- FIRE: `SupportsShouldProcess=$false` does not satisfy the guard
+
+**Substrate citations:**
+
+- everything-about-shouldprocess: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess
+- about_Functions_CmdletBindingAttribute: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_cmdletbindingattribute
+- about_Functions_Advanced_Methods: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_advanced_methods
 
 ### module-env-mismatch — module imported without required runtime directive
 
@@ -600,7 +636,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **75 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the round-2 SHOWSTOPPER fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; and the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the round-3 fix.
+- **84 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the round-2 SHOWSTOPPER fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the round-3 fix; and the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern.
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.
