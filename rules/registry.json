@@ -156,5 +156,22 @@
     "pattern": "\\[datetime\\]::TryParse\\s*\\(\\s*[^,]+,\\s*\\[ref\\]\\s*\\$null\\s*\\)",
     "message": "[datetime]::TryParse($s, [ref]$null) is an overload-resolution hazard. The 2-argument .NET overloads expect (String, out DateTime) or (ReadOnlySpan<Char>, out DateTime); passing [ref]$null makes the parsed DateTime value unreachable, and on .NET 7+ may resolve to a different overload and fail outright. Use '$result = $s -as [datetime]' instead: returns $null on failure with no exception and no overload ambiguity. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse",
     "enabled": true
+  },
+  {
+    "id": "R38",
+    "title": "Manual [switch]$WhatIf parameter -- use [CmdletBinding(SupportsShouldProcess=$true)] + $PSCmdlet.ShouldProcess()",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\\[switch\\]\\s*\\$WhatIf\\b",
+    "requires_absent": "SupportsShouldProcess\\s*(?:=\\s*\\$true|\\s*[,\\)]|\\s*$)",
+    "description": "A manual [switch]$WhatIf parameter bypasses PowerShell's CommonParameter injection: it does not set $WhatIfPreference for called cmdlets, does not wire -Confirm, and does not force destructive code through $PSCmdlet.ShouldProcess() -- leaving side-effects free to fire regardless of WhatIf intent. The canonical fix is [CmdletBinding(SupportsShouldProcess=$true)], which removes the need for a manual switch and gates all writes through $PSCmdlet.ShouldProcess($target, $operation).",
+    "remediation": "Replace [switch]$WhatIf with [CmdletBinding(SupportsShouldProcess=$true)] on the enclosing script or function, and gate all writes through: if ($PSCmdlet.ShouldProcess($target, $operation)) { ... }",
+    "references": [
+      "https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess",
+      "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_cmdletbindingattribute",
+      "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_advanced_methods"
+    ],
+    "message": "Manual [switch]$WhatIf detected without [CmdletBinding(SupportsShouldProcess=$true)]. A manual switch does not wire $WhatIfPreference, -Confirm, or $PSCmdlet.ShouldProcess() -- side-effects will fire regardless of WhatIf intent. Add [CmdletBinding(SupportsShouldProcess=$true)] and gate all writes through $PSCmdlet.ShouldProcess(). See: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess",
+    "enabled": true
   }
 ]
