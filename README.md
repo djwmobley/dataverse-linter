@@ -1,10 +1,15 @@
 # Dataverse Linter
 
-A standalone Node.js static analyzer for PowerShell scripts that call the Dataverse Web API and the `pac solution` CLI. It reads a `.ps1` file, extracts JSON payloads from here-strings, and evaluates the script against a registry of rules covering metadata layering, ALM sequencing, Web API correctness, and PowerShell script hygiene.
+A standalone Node.js static analyzer for PowerShell scripts that call the Dataverse Web API, the `pac solution` CLI, and PnP.PowerShell. It reads a `.ps1` file, extracts JSON payloads from here-strings, and evaluates the script against a registry of rules covering metadata layering, ALM sequencing, Web API correctness, and PowerShell script hygiene.
 
 ## Why it exists
 
-Many Dataverse ALM scripts fail in non-obvious ways — formula columns blocked at the Web API, optionset coverage drift, idempotency gaps in POST loops, PowerShell variable names shadowing the script scope, and more. This linter encodes recurring failure modes as enforceable rules so they are caught at author time, not at deployment time.
+PowerShell scripts targeting Dataverse, the `pac` CLI, and PnP are typically authored without runtime feedback at write-time. AI agents emitting code into chat or files are the most acute case — they produce syntactically plausible output with no connection to a live environment — but the same gap applies to one-shot scratch scripts, copy-paste from documentation, and any author who hasn't yet hit a given failure mode. The linter encodes the failure modes you would otherwise only learn by hitting them in production, and applies that catalog at author time.
+
+Three design choices follow from this:
+
+- **Surface coverage.** A script can originate from a file write, from a fenced PowerShell block in an assistant turn, or from PowerShell embedded inline in a Bash invocation. A single-surface gate leaks the other two. The linter enforces at all three surfaces via the same rule set and the same binary.
+- **Rule scope.** The catalog spans PowerShell script hygiene, Dataverse Web API correctness, `pac solution` CLI usage, and PnP.PowerShell cmdlet behavior. It is not single-domain.
 
 ## Severity policy
 
@@ -85,7 +90,7 @@ Wire-up in `~/.claude/settings.json`:
 
 ## Status
 
-Developed under adversarial review by an external "Judge" agent over six review phases. The substrate is approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content derivations, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
+The substrate is approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content derivations, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
 
 ## Install
 
@@ -642,6 +647,8 @@ node src/update-schema.js --mock path/to/metadata.xml
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.
 
 ## Extending the linter
+
+A new rule is justified only when it encodes a concrete runtime failure — the failure mode should be documented in the probe's `run-battery.js` comment and in the `## Failure modes` section.
 
 **Path A — dynamic rules (no code changes):** for `regex`, `regex-inverse`, or `regex-template` rules, write a JSON rule definition and ingest it:
 
