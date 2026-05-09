@@ -1,6 +1,6 @@
 # Dataverse Linter
 
-A standalone Node.js static analyzer for PowerShell scripts that call the Dataverse Web API, the `pac solution` CLI, and PnP.PowerShell. It reads a `.ps1` file, extracts JSON payloads from here-strings, and evaluates the script against a registry of rules covering metadata layering, ALM sequencing, Web API correctness, and PowerShell script hygiene.
+A standalone Node.js static analyzer for PowerShell scripts that call the Dataverse Web API, the `pac` CLI, and PnP.PowerShell. It reads a `.ps1` file, extracts JSON payloads from here-strings, and evaluates the script against a registry of rules covering metadata layering, ALM sequencing, Web API correctness, and PowerShell script hygiene.
 
 ## Why it exists
 
@@ -39,9 +39,9 @@ Wire-up in `~/.claude/settings.json`:
 
 ### 2. Stop — `hooks/stop-lint-chat.js`
 
-Triggered when Claude Code is about to stop (end a turn). Reads the transcript JSONL at `payload.transcript_path`, finds the last assistant turn, regex-extracts every fenced block whose language tag matches (case-insensitive) `powershell`, `pwsh`, `ps1`, or `posh`, writes each block to a temp `.ps1` file, and lints it. The fence regex accepts both column-0 fences and fences that follow inline prose on the same line (e.g., `Run this: ```powershell`). Generic `shell` and no-label fences are intentionally excluded. Non-PS fenced blocks (`bash`, `js`, etc.) and plain prose pass through silently. Temp files are deleted after each lint run.
+Triggered when Claude Code is about to stop (end a turn). Reads the transcript JSONL at `payload.transcript_path`, finds the last assistant turn, regex-extracts every fenced block whose language tag matches (case-insensitive) `powershell`, `pwsh`, `ps1`, or `posh`, writes each block to a temp `.ps1` file, and lints it. The fence regex accepts both column-0 fences and fences preceded by whitespace or inline text on the same line (e.g., `Run this: ```powershell`). Generic `shell` and no-label fences are intentionally excluded. Non-PS fenced blocks (`bash`, `js`, etc.) and plain prose pass through silently. Temp files are deleted after each lint run.
 
-Payload contract (`Stop`, documented at https://code.claude.com/docs/en/hooks):
+Payload contract (`Stop`, documented at https://code.claude.com/docs/hooks-reference):
 ```json
 { "hook_event_name": "Stop", "session_id": "...", "transcript_path": "/path/to/session.jsonl", "cwd": "...", "permission_mode": "..." }
 ```
@@ -76,7 +76,7 @@ Non-Bash tool calls and Bash commands without inline PS pass through silently.
 
 EncodedCommand decoding contract: per [about_PowerShell_exe](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe), "Accepts a base-64-encoded string version of a command. ... The string must be formatted using UTF-16LE character encoding." The hook decodes via `Buffer.from(b64, 'base64').toString('utf16le')`, which is round-trip-equivalent to PowerShell's `[System.Text.Encoding]::Unicode.GetBytes()` encoder. Malformed b64 is detect-and-block.
 
-Payload contract (`PreToolUse`, documented at https://code.claude.com/docs/en/hooks):
+Payload contract (`PreToolUse`, documented at https://code.claude.com/docs/hooks-reference):
 ```json
 { "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "pwsh -Command \"...\"", "description": "...", "timeout": 120000 }, "tool_use_id": "..." }
 ```
@@ -136,12 +136,12 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | ID | Type | Severity | What it catches |
 |---|---|---|---|
 | R07 | regex | ERROR | `pac solution import --force-overwrite` usage; flag does not resolve metadata conflicts and should be paired with attribute deletion. |
-| R12 | regex (conjunction) | ERROR | `Connect-CrmOnlineDiscovery` or `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` import without a `#Requires -Version 5.1` or `#Requires -PSEdition Desktop` guard; these modules hang under pwsh — script must run under `powershell.exe` 5.1. v0.3.1 made the rule conjunction-aware via `requires_absent`. v0.4.1 fixed a false negative where a `#Requires` lexeme nested inside a `<# ... #>` block comment was incorrectly accepted as a guard (PS does not honor it at parse time); the guard view is now `rawContentNoBlockComments`. |
+| R12 | regex (conjunction) | ERROR | `Connect-CrmOnlineDiscovery` or `Microsoft.Xrm.Tooling.CrmConnector.PowerShell` import without a `#Requires -Version 5.1` or `#Requires -PSEdition Desktop` guard; these modules hang under pwsh — script must run under `powershell.exe` 5.1. v0.4.1 made the rule conjunction-aware via `requires_absent`. v0.4.1 fixed a false negative where a `#Requires` lexeme nested inside a `<# ... #>` block comment was incorrectly accepted as a guard (PS does not honor it at parse time); the guard view is now `rawContentNoBlockComments`. |
 | R13 | regex | ERROR | `$select`, `$filter`, or `$expand` inside a double-quoted string without a backtick escape; PowerShell interpolates these, corrupting the OData query. |
 | R18 | regex | ERROR | `BooleanAttributeMetadata` payload missing `TrueOption`/`FalseOption`; both are required by the Dataverse Web API. |
-| R21 | regex | ERROR | `Invoke-RestMethod POST` appears after `pac solution import`; managed solution import should precede table/column creation to avoid metadata layering conflicts. |
+| R21 | regex | ERROR | `Invoke-RestMethod -Method POST` (component creation) precedes `pac solution import`; managed solution import should precede table/column creation to avoid metadata layering conflicts. |
 | R24 | regex | ERROR | `pac solution import` without `--publish-changes`; customizations remain unpublished after import, leaving the deployment half-broken. |
-| R25 | regex-template (script-scope only) | ERROR | Assignment to a bare script-scope variable matching one of the configured names (default: `headers`, `body`, `conn`, `options`, `response`, `result`); these shadow `$script:` prefixed equivalents. v0.3.1 made the rule scope-aware via `scope: "script-only"`: matches inside a `function NAME { ... }` body are suppressed because PowerShell function bodies have their own variable scope and cannot shadow `$script:`. |
+| R25 | regex-template (script-scope only) | ERROR | Assignment to a bare script-scope variable matching one of the configured names (default: `headers`, `body`, `conn`, `options`, `response`, `result`); these shadow `$script:` prefixed equivalents. v0.4.1 made the rule scope-aware via `scope: "script-only"`: matches inside a `function NAME { ... }` body are suppressed because PowerShell function bodies have their own variable scope and cannot shadow `$script:`. |
 | R26 | regex | ERROR | OData query for `FormulaDefinition` on the base `AttributeMetadata` endpoint; a derived type cast is required (e.g., `/Microsoft.Dynamics.CRM.DecimalAttributeMetadata`). |
 | R28 | regex-inverse (conjunction) | ERROR | Script lacks an idempotency guard (`if ($null -eq ...)`); Web API POST calls without a guard create duplicate records on every re-run. v0.4.2 made the rule conjunction-aware via `requires_present`: it applies only when the file actually contains a Dataverse Web API mutation call (`Invoke-RestMethod`/`Invoke-WebRequest` with `-Method POST`/`PATCH`/`PUT`). Minimal snippets without a mutation no longer false-positive. |
 | R29 | regex | ERROR | Non-ASCII character (em-dash, section sign, smart quotes, ellipsis, bullet, en-dash, nbsp) inside a double-quoted string literal; PS 5.1's brace-counter silently misbehaves and produces `MissingEndCurlyBrace` at unrelated lines. Same chars in `#` comments are safe. |
@@ -171,7 +171,7 @@ When a managed solution import encounters a conflicting component (for example, 
 
 These modules are built against the .NET Framework and use WinAPI threading primitives that are incompatible with PowerShell Core (pwsh 7). When imported under pwsh, the module either fails to load silently or hangs indefinitely on the connection attempt. The script must carry a guard directive (either `#Requires -Version 5.1` or `#Requires -PSEdition Desktop`) and be invoked via `powershell.exe`, not `pwsh.exe`. The `module-env-mismatch` rule provides a complementary check via `module-requirements.json` (which specifically requires `#Requires -PSEdition Desktop`; -Version 5.1 is accepted by R12 but not by `module-env-mismatch`).
 
-**v0.3.1 — conjunction-aware:** R12 uses the `requires_absent` rule field. The rule fires only when the main pattern matches AND the guard view does NOT match `^#Requires\s+(?:-Version\s+5\.1\b|-PSEdition\s+Desktop\b)`. Either guard is accepted as satisfying the rule. The previous behavior (fire on every cmdlet occurrence regardless of context) caused the linter to fire on legitimate, correct PowerShell that already had the guard in place — including hits on the cmdlet name appearing in comments and string literals. With the conjunction in place, R12 now matches the message's stated intent: "Ensure script has #Requires ... and runs under powershell.exe."
+**v0.4.1 — conjunction-aware:** R12 uses the `requires_absent` rule field. The rule fires only when the main pattern matches AND the guard view does NOT match `^#Requires\s+(?:-Version\s+5\.1\b|-PSEdition\s+Desktop\b)`. Either guard is accepted as satisfying the rule. The previous behavior (fire on every cmdlet occurrence regardless of context) caused the linter to fire on legitimate, correct PowerShell that already had the guard in place — including hits on the cmdlet name appearing in comments and string literals. With the conjunction in place, R12 now matches the message's stated intent: "Ensure script has #Requires ... and runs under powershell.exe."
 
 **v0.4.1 — block-comment guard fix:** The guard view changed from `rawContent` to `rawContentNoBlockComments`. The fix addresses a false negative: a `#Requires -Version 5.1` lexeme nested inside a `<# ... #>` block comment satisfied the guard regex when tested against `rawContent`, but PowerShell does not honor `#Requires` inside block comments at parse time, so the script would still hang on `Connect-CrmOnlineDiscovery` under pwsh — exactly the failure R12 is designed to catch. The fix introduces `stripBlockComments()` in `extractor.js`, which length-preservingly space-fills every `<# ... #>` range. The guard regex now tests against this view, so block-comment-nested `#Requires` lexemes are correctly NOT recognized as guards while line-comment `#Requires` directives (the form PS actually honors) ARE recognized.
 
@@ -186,11 +186,11 @@ Substrate citations:
 
 **Probes:**
 
-- `probe-R12-cmdlet-no-guard.ps1` (v0.3.1) — true positive: cmdlet present, no guard. R12 fires.
-- `probe-R12-cmdlet-with-guard.ps1` (v0.3.1) — true negative: cmdlet present, `#Requires -Version 5.1` present. R12 suppressed. (`module-env-mismatch` fires independently because its required directive is the stricter `-PSEdition Desktop`.)
-- `probe-R12-cmdlet-with-desktop-guard.ps1` (v0.3.1) — true negative: cmdlet present, `#Requires -PSEdition Desktop` present. R12 suppressed. Probe is fully clean.
-- `probe-R12-no-cmdlet-no-guard.ps1` (v0.3.1) — negative control: neither pattern matches. R12 does not fire.
-- `probe-R12-cmdlet-in-string-with-guard.ps1` (v0.3.1) — true negative: cmdlet name appears only in a string literal AND the guard is present. R12 suppressed (guard is dispositive). Documents that string-literal cmdlet mentions are benign once the guard is in place.
+- `probe-R12-cmdlet-no-guard.ps1` (v0.4.1) — true positive: cmdlet present, no guard. R12 fires.
+- `probe-R12-cmdlet-with-guard.ps1` (v0.4.1) — true negative: cmdlet present, `#Requires -Version 5.1` present. R12 suppressed. (`module-env-mismatch` fires independently because its required directive is the stricter `-PSEdition Desktop`.)
+- `probe-R12-cmdlet-with-desktop-guard.ps1` (v0.4.1) — true negative: cmdlet present, `#Requires -PSEdition Desktop` present. R12 suppressed. Probe is fully clean.
+- `probe-R12-no-cmdlet-no-guard.ps1` (v0.4.1) — negative control: neither pattern matches. R12 does not fire.
+- `probe-R12-cmdlet-in-string-with-guard.ps1` (v0.4.1) — true negative: cmdlet name appears only in a string literal AND the guard is present. R12 suppressed (guard is dispositive). Documents that string-literal cmdlet mentions are benign once the guard is in place.
 - `probe-R12-block-comment-requires.ps1` (v0.4.1) — true positive: `<# #Requires -Version 5.1 #>` followed by `Connect-CrmOnlineDiscovery`. The block-comment-nested directive is not honored by PS, so R12 fires. Pins the v0.4.1 block-comment guard fix.
 - `probe-R12-block-comment-requires-line-form.ps1` (v0.4.1) — true positive: block-comment-nested directive with structure (`<#` and `#>` on their own lines, `#Requires -Version 5.1` at column 0 on a middle line). R12 fires.
 - `probe-R12-line-comment-requires-still-works.ps1` (v0.4.1) — regression anchor: canonical line-comment `#Requires -Version 5.1` (NOT inside `<# #>`). R12 does NOT fire — pins line-comment guard recognition so future widening of `stripBlockComments` cannot regress it.
@@ -226,21 +226,21 @@ A `pac solution import` that succeeds at the CLI level does not automatically pu
 
 In PowerShell, a bare `$headers = ...` assignment at script scope is identical to `$script:headers = ...`. If a helper function later does `$headers = ...` as a local variable, it shadows the script-scope variable silently — subsequent code using `$script:headers` gets the wrong value, commonly manifesting as a 401 (auth dict wiped) on subsequent Web API calls. Use unique local names or explicit `$local:` / `$script:` prefixes to avoid the ambiguity.
 
-**v0.3.1 — scope-aware:** R25 now uses the `scope: "script-only"` rule field. Matches whose match index lies inside a `function NAME { ... }` declaration body are suppressed. PowerShell function bodies have their own variable scope; an assignment of the form `$body = ...` inside a function is function-local and CANNOT shadow `$script:body` (which is what R25 is designed to catch). The previous behavior fired on legitimate function-local assignments, forcing authors to either rename variables (acceptable) or pollute the watch-list with apologetic comments. Scope-awareness restores the rule to its stated intent: "Unprefixed assignment **at script scope** shadows `$script:`."
+**v0.4.1 — scope-aware:** R25 now uses the `scope: "script-only"` rule field. Matches whose match index lies inside a `function NAME { ... }` declaration body are suppressed. PowerShell function bodies have their own variable scope; an assignment of the form `$body = ...` inside a function is function-local and CANNOT shadow `$script:body` (which is what R25 is designed to catch). The previous behavior fired on legitimate function-local assignments, forcing authors to either rename variables (acceptable) or pollute the watch-list with apologetic comments. Scope-awareness restores the rule to its stated intent: "Unprefixed assignment **at script scope** shadows `$script:`."
 
-Implementation: `extractor.computeFunctionBodyRanges(rawContent)` walks the file with a string-/comment-aware scanner, finds each `function` keyword at a statement-start position, then traces the matching open/close brace to record `[openBraceIdx, closeBraceIdx]`. The validator skips matches whose `match.index` falls strictly inside any recorded range. Range computation uses `rawContent` because `strippedContent` blanks `#>` block-comment terminators; using rawContent keeps block comments balanced. The v0.3.1 length-preserving `stripComments` change (replace matched chars with spaces, preserving newlines) ensures `match.index` in `strippedContent` aligns with rawContent indices.
+Implementation: `extractor.computeFunctionBodyRanges(rawContent)` walks the file with a string-/comment-aware scanner, finds each `function` keyword at a statement-start position, then traces the matching open/close brace to record `[openBraceIdx, closeBraceIdx]`. The validator skips matches whose `match.index` falls strictly inside any recorded range. Range computation uses `rawContent` because `strippedContent` blanks `#>` block-comment terminators; using rawContent keeps block comments balanced. The v0.4.1 length-preserving `stripComments` change (replace matched chars with spaces, preserving newlines) ensures `match.index` in `strippedContent` aligns with rawContent indices.
 
-**Probes (v0.3.1):**
+**Probes (v0.4.1):**
 
 - `probe-R25-script-scope-body.ps1` — true positive: `$body = @{...}` at script scope (inside an `if` block — `if` is not a function declaration). R25 fires once.
-- `probe-R25-function-local-body.ps1` — true negative (regression anchor for the v0.3.1 fix): `$body = @{...}` inside `function Create-LookupFromRow { ... }`. R25 does not fire. This anchors the false positive that caused `wire_cross_module_connections.ps1` v0.2 line 167 to be linted as a violation under v0.3.0.
+- `probe-R25-function-local-body.ps1` — true negative (regression anchor for the v0.4.1 fix): `$body = @{...}` inside `function Create-LookupFromRow { ... }`. R25 does not fire. This anchors the false positive that caused `wire_cross_module_connections.ps1` v0.2 line 167 to be linted as a violation under v0.3.0.
 - `probe-R25-watch-name-prefixed.ps1` — true negative: `$script:body = ...` at script scope. The leading `$script:` makes the leading regex `^\s*\$(headers|body|...)\s*=` not match, so R25 does not fire.
 - `probe-R25-non-watch-name.ps1` — true negative: `$widget = ...` at script scope. The variable name is not in the watch-list; R25 does not fire.
 
 **Known limitations:**
 
-- **Anonymous scriptblocks not tracked.** A construct like `$sb = { $body = "x" }` (anonymous scriptblock literal at script scope) IS a function-local scope at runtime, but the v0.3.1 scanner only tracks `function NAME { ... }` declarations, not anonymous `{ ... }` scriptblocks. R25 will fire on `$body` inside an anonymous scriptblock at script scope, even though the runtime behavior is identical to a function. This is an accepted limitation; if it becomes a real false-positive source, a future rev can extend `computeFunctionBodyRanges` to track scriptblock literals (the heuristic is harder because `{ ... }` appears in many non-scriptblock contexts: hashtables, if-blocks, foreach-blocks, etc.).
-- **`filter` declarations not tracked.** `filter Foo { ... }` is treated like a function at runtime but the v0.3.1 scanner anchors on the `function` keyword. PowerShell `filter` is rare; not worth a separate scanner pass yet.
+- **Anonymous scriptblocks not tracked.** A construct like `$sb = { $body = "x" }` (anonymous scriptblock literal at script scope) IS a function-local scope at runtime, but the v0.4.1 scanner only tracks `function NAME { ... }` declarations, not anonymous `{ ... }` scriptblocks. R25 will fire on `$body` inside an anonymous scriptblock at script scope, even though the runtime behavior is identical to a function. This is an accepted limitation; if it becomes a real false-positive source, a future rev can extend `computeFunctionBodyRanges` to track scriptblock literals (the heuristic is harder because `{ ... }` appears in many non-scriptblock contexts: hashtables, if-blocks, foreach-blocks, etc.).
+- **`filter` declarations not tracked.** `filter Foo { ... }` is treated like a function at runtime but the v0.4.1 scanner anchors on the `function` keyword. PowerShell `filter` is rare; not worth a separate scanner pass yet.
 - **Nested functions covered by inclusion.** A function declared inside another function's body has its own range, but the outer range already covers it; either range matching suppresses the rule, so behavior is correct (function-local at any nesting level is suppressed).
 - **Statement-start heuristic.** The scanner requires the `function` keyword to appear after start-of-file, `\n`, `;`, `{`, `}`, or `\r` (with optional intervening whitespace). A `function` keyword that follows a non-statement-start char is treated as an identifier and not as a declaration. This is correct PowerShell parsing for the cases the scanner targets but is not a full PS-AST parse.
 
@@ -256,7 +256,7 @@ Web API POST calls to create Dataverse records fail on re-run if the record alre
 
 This closed a known limitation from v0.4.0: minimal snippets such as `pwsh -Command "Get-Date"` or any script that does not call the Web API at all tripped R28 because the inverse pattern was absent file-wide. With the conjunction in place, R28 fires only when the rule's stated intent applies — a real mutation call exists and is unguarded.
 
-The `requires_present` check uses `normalizedContent` (line-comment-stripped, backtick-continuation-collapsed) so that a mutation call with a quoted method literal (`-Method "POST"`) is correctly recognized. `noCommentNoStringContent` strips string contents, turning `-Method "POST"` into `-Method ""` and silently failing the method alternation. A mutation-shaped string inside a line comment is excluded from `normalizedContent` because line comments are stripped via `strippedContent`. Block comments are not stripped from this view; if a future use case demands block-comment exclusion for `requires_present`, switch to a normalized-`rawContentNoBlockComments` hybrid then.
+The `requires_present` check uses `normalizedContent` so a quoted method literal like `-Method "POST"` is correctly recognized; full rationale is in the `requires_present` documentation in the Optional rule fields section.
 
 **Substrate citations for the mutation-method list:**
 
@@ -318,7 +318,7 @@ Source: https://pnp.github.io/powershell/cmdlets/Set-PnPPage.html
 
 ### R34 — `pac install` is not a valid pac command group
 
-The Power Platform CLI (`pac`) has no top-level `install` command group. The complete list of pac command groups (as of 2026-02-25) does not include `install`. Scripts using `pac install latest` or any other `pac install` subcommand fail at CLI parse time with "unknown command". The correct surface for installing an app to an environment is `pac application install --environment-id <id> --application-name <name>`.
+The Power Platform CLI (`pac`) has no top-level `install` command group. The complete list of pac command groups at the time of R34's authoring does not include `install`. Scripts using `pac install latest` or any other `pac install` subcommand fail at CLI parse time with "unknown command". The correct surface for installing an app to an environment is `pac application install --environment-id <id> --application-name <name>`.
 
 Source: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/
 
@@ -450,7 +450,7 @@ Example — R28 fires when `if ($null -eq` is missing from real executable code:
 
 The following optional fields refine when a rule applies. All three rule types accept these unless noted otherwise.
 
-#### `requires_absent` — conjunction guard (v0.3.1; v0.4.1 view fix)
+#### `requires_absent` — conjunction guard (v0.4.1; v0.4.1 view fix)
 
 A regex pattern. If set, the rule fires only when the main `pattern` matches AND the `requires_absent` regex does NOT match the guard view. Used to express "this is a violation UNLESS a guard directive is present" — for example, R12 fires on `Connect-CrmOnlineDiscovery` only when neither `#Requires -Version 5.1` nor `#Requires -PSEdition Desktop` is in the file.
 
@@ -458,7 +458,7 @@ The guard view is `rawContentNoBlockComments` — `rawContent` with every `<# ..
 
 - Line-comment `#Requires` directives (the form PS honors at parse time) remain visible to the guard regex because `stripBlockComments` only blanks block-comment ranges, not line-comment text.
 - Block-comment-nested `#Requires` lexemes are NOT visible in this view, matching PowerShell parser behavior: text inside `<# ... #>` is comment content (per [about_Comments](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comments): "All text within the block is treated as part of the same comment, including whitespace"), and a `#Requires` directive must be "the first item on a line" (per [about_Requires](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_requires)) — which a comment-internal lexeme is not.
-- Previously (v0.3.1) the test ran against `rawContent`, which matched a block-comment-nested directive and suppressed the rule even though PS would not honor the directive at runtime. v0.4.1 closes this gap by testing the guard against `rawContentNoBlockComments`.
+- Previously (v0.4.1) the test ran against `rawContent`, which matched a block-comment-nested directive and suppressed the rule even though PS would not honor the directive at runtime. v0.4.1 closes this gap by testing the guard against `rawContentNoBlockComments`.
 
 Block comments do not nest in PowerShell (per about_Comments: "you can't nest block comments. If you attempt to nest block comments, the outer block comment ends at the first `#>` encountered."), so the non-greedy `<#[\s\S]*?#>` regex inside `stripBlockComments` is correct.
 
@@ -467,7 +467,7 @@ Block comments do not nest in PowerShell (per about_Comments: "you can't nest bl
   "id": "R12",
   "type": "regex",
   "pattern": "Connect-CrmOnlineDiscovery|Import-Module\\s+Microsoft\\.Xrm\\.Tooling\\.CrmConnector\\.PowerShell",
-  "requires_absent": "^#Requires\\s+(?:-Version\\s+5\\.1|-PSEdition\\s+Desktop)",
+  "requires_absent": "^#Requires\\s+(?:-Version\\s+5\\.1\\b|-PSEdition\\s+Desktop\\b)",
   "message": "These modules hang in pwsh. Ensure script has #Requires -Version 5.1 or #Requires -PSEdition Desktop ...",
   "severity": "ERROR",
   "enabled": true
@@ -552,7 +552,7 @@ Entry shape:
 }
 ```
 
-Adding a new module is a config-only edit — no validator code change is needed provided the new entry follows the same `import_pattern` + `requires_directives` shape.
+Adding a new module is a config-only edit — no validator code change is needed provided the new entry follows the same `import_pattern` + `requires_directives` shape. New entries are added by editing `rules/module-requirements.json`; the `rule_id` field is hardcoded to `"module-env-mismatch"` for all entries (this is the rule that fires; other rule_ids are not currently supported in this file).
 
 ## Validator content views
 
@@ -560,9 +560,11 @@ The validator works against three derived surfaces of the script content, not th
 
 **`strippedContent`** — the raw file with full-line `#` comments removed (lines where the first non-whitespace character is `#`). Default for most `regex` and `regex-template` rules. Inline comments after code are retained; use `noCommentNoStringContent` if inline comment bypass is a concern.
 
-**`normalizedContent`** — `strippedContent` with PowerShell backtick-newline continuations (`` ` `` followed by a newline) collapsed to a single space, making a multi-line command one logical line. Used by R24 and R21 so that a `pac solution import` split across lines with backtick continuation is evaluated as a single statement and `--publish-changes` is not missed.
+**`normalizedContent`** — `strippedContent` with PowerShell backtick-newline continuations (`` ` `` followed by a newline) collapsed to a single space, making a multi-line command one logical line. Used by R24 and R21 so that a `pac solution import` split across lines with backtick continuation is evaluated as a single statement and `--publish-changes` is not missed. (Computed locally in `validator.js`, not returned from the extractor's view object — unlike the other views in this section.)
 
 **`noCommentNoStringContent`** — the most aggressively stripped surface. Removes, in order: here-string bodies, block comments (`<# ... #>`), double-quoted strings, single-quoted strings, and all remaining `#`-to-end-of-line comments. Used exclusively by `regex-inverse` rules (R28) to prevent bypass: a developer cannot satisfy the idempotency guard requirement by placing the pattern inside a comment or a string literal.
+
+**`rawContentNoBlockComments`** — the raw file with every `<# ... #>` block-comment range length-preservingly space-filled (so character offsets are preserved). Produced by `extractor.stripBlockComments()`. Used as the guard view for `requires_absent` (R12) and for module-env-mismatch directive presence checks. Block-comment-nested `#Requires` lexemes are correctly NOT recognized as guards; line-comment `#Requires` directives (the form PS honors at parse time) ARE recognized.
 
 ## CLI reference — `rule-manager.js`
 
@@ -641,7 +643,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **84 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.3.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.3.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the v0.4.1 block-comment guard fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the v0.4.2 module-env-mismatch block-comment fix; and the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern.
+- **84 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.4.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.4.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the v0.4.1 block-comment guard fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the v0.4.2 module-env-mismatch block-comment fix; and the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern.
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.
