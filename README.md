@@ -90,7 +90,7 @@ Wire-up in `~/.claude/settings.json`:
 
 ## Status
 
-The substrate is approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content derivations, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
+The substrate is approved for internal pilot use; it has not yet been validated by an org-wide pilot. Rule IDs, content views, and CLI surface are considered stable for pilot purposes but should be treated as pre-1.0 until pilot findings are incorporated.
 
 ## Install
 
@@ -431,7 +431,7 @@ Example — R07 catches `--force-overwrite` on any `pac solution import` call:
 
 ### `regex-inverse`
 
-Fires when the pattern does NOT match — i.e., a required element is absent. Used for mandatory patterns such as idempotency guards (R28). These rules evaluate against `noCommentNoStringContent` (see Content derivations) so that a developer cannot satisfy the rule by hiding the pattern inside a comment or string literal.
+Fires when the pattern does NOT match — i.e., a required element is absent. Used for mandatory patterns such as idempotency guards (R28). These rules evaluate against `noCommentNoStringContent` (see Validator content views) so that a developer cannot satisfy the rule by hiding the pattern inside a comment or string literal.
 
 Example — R28 fires when `if ($null -eq` is missing from real executable code:
 
