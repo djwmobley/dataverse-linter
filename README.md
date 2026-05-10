@@ -152,6 +152,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R35 | regex | ERROR | `[Parser]::ParseFile($p, [ref]$null, [ref]$null)` with both output arguments as `[ref]$null`; silently discards all parsed tokens and all parse errors. See: https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.language.parser.parsefile |
 | R36 | regex | ERROR | `[datetime]::TryParse($s, [ref]$null)` 2-argument form with `[ref]$null`; the parsed `DateTime` value is unreachable, and on .NET 7+ the call may resolve to a different overload and fail. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse |
 | R38 | regex (conjunction) | ERROR | Manual `[switch]$WhatIf` parameter without `[CmdletBinding(SupportsShouldProcess=$true)]`. A manual switch does not wire `$WhatIfPreference`, `-Confirm`, or `$PSCmdlet.ShouldProcess()` -- side-effects fire regardless of WhatIf intent. See: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess |
+| R39 | regex | ERROR | Variable followed by colon inside a double-quoted string (e.g., `"$varname: text"` or `"$path:`n"`). PS treats `$varname:` as a scope-qualifier prefix (same as `$env:`, `$script:`, `$global:`); when the character after `:` is not a valid variable-name start, the parser raises a parse-time error and the script cannot load. Legitimate scope qualifiers (`$env:VAR`, `$global:foo`) are not flagged. Fix: `${varname}:`. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
@@ -384,6 +385,72 @@ R38 fires when a `param(...)` block declares `[switch]$WhatIf` without `[CmdletB
 - everything-about-shouldprocess: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess
 - about_Functions_CmdletBindingAttribute: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_cmdletbindingattribute
 - about_Functions_Advanced_Methods: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_advanced_methods
+
+### R39 -- Variable followed by colon in double-quoted string (scope-qualifier parse trap)
+
+R39 fires when a double-quoted string contains `$identifier:` where the character immediately after the colon is not a valid variable-name start character (letter, digit, underscore, or `{` for the `${...}` curly-brace delimiter form). PowerShell's string expander treats everything between `$` and `:` as a scope-qualifier prefix -- the same mechanism that makes `$env:USERNAME`, `$script:foo`, and `$global:bar` work. When the character after `:` is not a valid variable-name start (backtick `` ` ``, space, closing quote `"`, punctuation), the PS parser raises at parse time:
+
+```
+Variable reference is not valid. ':' was not followed by a valid variable name character.
+Consider using ${} to delimit the name.
+```
+
+The script cannot load or run -- this is a parse-time failure, not a runtime failure. The defect is invisible at authoring time because the string looks syntactically correct to the human eye.
+
+**Incident origin (v0.5.1):** AdvAccel `build_avinext_bundle.ps1` line 513:
+```powershell
+$msg = "Invoke-ZipIntegrityGate FAILED on $ZipPath:`n" + ...
+```
+PS 5.1 read `$ZipPath:` as a scope-qualifier prefix; the next character is a backtick (`\`` -- the escape character), which is not a valid variable-name start. The parser raised `Variable reference is not valid. ':' was not followed by a valid variable name character.` The fix is `${ZipPath}:` -- the curly-brace form makes `:` a literal character following the variable expansion.
+
+**Canonical fix:** Replace `$varname:` with `${varname}:` inside the double-quoted string.
+
+```powershell
+# WRONG (parse-time error):
+$msg = "Invoke-ZipIntegrityGate FAILED on $ZipPath:`n"
+$msg = "User $username:"
+$msg = "Path $varname: more text"
+
+# CORRECT:
+$msg = "Invoke-ZipIntegrityGate FAILED on ${ZipPath}:`n"
+$msg = "User ${username}:"
+$msg = "Path ${varname}: more text"
+```
+
+**Detection strategy:** Single `regex` rule. Pattern `"[^"\r\n]*\$[A-Za-z_]\w*:(?![A-Za-z0-9_{])[^"\r\n]*"` matches a double-quoted string on a single line that contains `$identifier:` followed by a non-identifier/non-brace character. The negative lookahead `(?![A-Za-z0-9_{])` ensures legitimate scope qualifiers (`$env:VAR`, `$global:foo`, `$script:bar`) are not flagged -- those are followed by letters that ARE in the allowed character class.
+
+**Legitimate scope qualifiers suppressed (NOT flagged):**
+
+- `$env:VAR` (environment provider) -- next char is a letter
+- `$global:foo`, `$local:baz`, `$private:qux`, `$script:bar`, `$using:remote` (scope modifiers) -- next char is a letter
+- `$function:fname`, `$alias:aname`, `$variable:vname` (provider paths) -- next char is a letter
+- `${varname}:` (curly-brace delimiter form -- the canonical fix) -- `$` is followed by `{`, not matched by `\$[A-Za-z_]`
+
+**Probes:**
+
+- `probe-R39-colon-space.ps1` -- FIRE: `"$varname: more text"` -- space after colon
+- `probe-R39-colon-backtick-escape.ps1` -- FIRE: `"FAILED on $ZipPath:`n"` -- backtick after colon (the original incident)
+- `probe-R39-colon-second-colon.ps1` -- FIRE: `"Result: $count: items"` -- second colon with space after
+- `probe-R39-colon-end-of-string.ps1` -- FIRE: `"User $username:"` -- colon at end of string
+- `probe-R39-env-scope-qualifier.ps1` -- NO FIRE: `$env:USERNAME` outside a string (not inside `"..."`)
+- `probe-R39-curly-brace-fix.ps1` -- NO FIRE: `"${ZipPath}:`n"` -- canonical fix form; `${` not matched by `\$[A-Za-z_]`
+- `probe-R39-single-quoted-no-expand.ps1` -- NO FIRE: single-quoted string; no expansion, no parse error; rule anchors on `"..."`
+- `probe-R39-global-scope-in-string.ps1` -- NO FIRE: `"$global:foo"` -- `f` after colon is in `[A-Za-z0-9_{]`; lookahead suppresses
+- `probe-R39-script-scope-in-string.ps1` -- NO FIRE: `"$script:bar"` -- `b` after colon is in `[A-Za-z0-9_{]`; lookahead suppresses
+- `probe-R39-comment-no-fire.ps1` -- NO FIRE: `$varname:` in a full-line comment; `strippedContent` removes full-line comments before matching
+
+**Substrate citations:**
+
+- about_Quoting_Rules: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules -- "This is especially important if the variable name is followed by a colon (`:`). PowerShell considers everything between the `$` and the `:` a scope specifier, typically causing the interpretation to fail. For example, `"$HOME: where the heart is."` throws an error, but `"${HOME}: where the heart is."` works as intended."
+- about_Variables: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_variables -- scope modifiers ($Global:, $Local:, $Private:, $Script:, $Using:) and provider paths ($env:, $variable:, $function:, $alias:) confirmed as the complete known-good allowlist.
+- about_Special_Characters: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_special_characters -- escape sequences (`` `n ``, `` `t ``, etc.) begin with backtick (ASCII 96), which is not a valid variable-name start character, explaining why `$var:`n` triggers the parse error.
+
+**Known limitations:**
+
+- **Single-line pattern only:** The rule matches double-quoted strings that open and close on the same line (pattern uses `[^"\r\n]*` which stops at newline). A multi-line double-quoted string (PowerShell allows these) is not fully inspected. A `$varname:` near the end of a line inside a multi-line string where the closing `"` is on a different line would not match. See `probe-R39-colon-backtick-escape.ps1` for the incident shape -- the string with `` `n `` is a single-line string with a literal backtick-n inside it (not a physical newline), so it IS caught.
+- **Backtick-escaped quote not tracked:** A `\"` inside a double-quoted string advances the matching `[^"\r\n]*` past the backslash but the `"` terminates the match in the pattern. This is an accepted limitation analogous to R29's known boundary handling.
+- **Multi-line concatenated strings:** R39 fires on each line independently. A `$varname:` on a line whose string context spans multiple lines via concatenation (`+`) is detected if the offending segment is a self-contained `"..."` token on that line.
+- **Case-sensitivity:** The pattern is case-sensitive (`gm` flags). Variable names in PowerShell are case-insensitive at runtime but the regex `[A-Za-z_]\w*` covers both cases in the pattern.
 
 ### module-env-mismatch — module imported without required runtime directive
 
