@@ -82,7 +82,8 @@ console.log("Running Fail Battery...");
             const knownValidRules = [
                 ...expectedRules,
                 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch',
-                'R32', 'R33', 'R34', 'R35', 'R36', 'R37', 'R38', 'R39'
+                'R32', 'R33', 'R34', 'R35', 'R36', 'R37', 'R38', 'R39',
+                'R40', 'R41', 'R42', 'R43', 'R44'
             ];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
@@ -1280,6 +1281,207 @@ const probes = [
         mustNotFire: [],
         expectClean: false
     }
+,
+    // =========================================================================
+    // v0.6.0 R40-R44 -- PWA / PnP / Project Server REST rule family
+    // P1 = R40, P2 = R41, P3 = R42, P4 = R43, P8 = R44
+    //
+    // Citations:
+    //   - R40/R42/R43: https://pnp.github.io/powershell/cmdlets/Invoke-PnPSPRestMethod.html
+    //     https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html
+    //     https://pnp.github.io/powershell/articles/registerapplication.html
+    //   - R41/R44: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests
+    //     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview
+    // =========================================================================
+
+    // =========================================================================
+    // R40 -- Invoke-PnPSPRestMethod -Url missing leading slash (P1)
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R40-no-leading-slash.ps1'),
+        label: 'probe-R40-no-leading-slash',
+        // TP: -Url "api/ProjectServer/Projects" -- no leading slash. R40 MUST fire.
+        mustFire: ['R40'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R40-relative-path-no-slash.ps1'),
+        label: 'probe-R40-relative-path-no-slash',
+        // TP: -Url "_api/web/lists" -- starts with underscore, no leading slash. R40 MUST fire.
+        mustFire: ['R40'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R40-correct-leading-slash.ps1'),
+        label: 'probe-R40-correct-leading-slash',
+        // TN: -Url "/_api/ProjectServer/Projects" -- correct leading slash. R40 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R40'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R40-variable-url.ps1'),
+        label: 'probe-R40-variable-url',
+        // TN: -Url $relativeUrl -- variable reference, not a string literal. R40 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R40'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R40-https-url.ps1'),
+        label: 'probe-R40-https-url',
+        // TN: -Url "https://..." -- full absolute URL. R40 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R40'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R41 -- Dataverse _value suffix on SharePoint/ProjectServer REST URL (P2)
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R41-value-on-projectserver.ps1'),
+        label: 'probe-R41-value-on-projectserver',
+        // TP: _owner_value in a ProjectServer REST URL. R41 MUST fire.
+        mustFire: ['R41'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R41-value-on-api-web.ps1'),
+        label: 'probe-R41-value-on-api-web',
+        // TP: _assignedto_value in a /_api/web/ URL. R41 MUST fire.
+        mustFire: ['R41'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R41-value-on-dataverse.ps1'),
+        label: 'probe-R41-value-on-dataverse',
+        // TN: _ownerid_value on /api/data/v9.2/... (Dataverse URL). R41 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R41'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R41-plain-field-on-projectserver.ps1'),
+        label: 'probe-R41-plain-field-on-projectserver',
+        // TN: plain field name "Owner" (no _value suffix) on ProjectServer URL. R41 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R41'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R42 -- Connect-PnPOnline -DeviceLogin without -ClientId (P3)
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R42-devicelogin-no-clientid.ps1'),
+        label: 'probe-R42-devicelogin-no-clientid',
+        // TP: -DeviceLogin without -ClientId. Mandatory since 2024-09-09. R42 MUST fire.
+        mustFire: ['R42'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R42-devicelogin-with-tenant-no-clientid.ps1'),
+        label: 'probe-R42-devicelogin-with-tenant-no-clientid',
+        // TP: -DeviceLogin + -Tenant but no -ClientId. R42 MUST fire.
+        mustFire: ['R42'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R42-devicelogin-with-clientid.ps1'),
+        label: 'probe-R42-devicelogin-with-clientid',
+        // TN: -DeviceLogin WITH -ClientId (correct post-2024-09-09 form). R42 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R42'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R42-interactive-no-clientid.ps1'),
+        label: 'probe-R42-interactive-no-clientid',
+        // TN: -Interactive auth (not -DeviceLogin) -- outside R42 scope. R42 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R42'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R43 -- Register-PnPManagementShellAccess is a removed cmdlet (P4)
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R43-basic-trigger.ps1'),
+        label: 'probe-R43-basic-trigger',
+        // TP: bare Register-PnPManagementShellAccess statement. R43 MUST fire.
+        mustFire: ['R43'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R43-in-write-host.ps1'),
+        label: 'probe-R43-in-write-host',
+        // TP: cmdlet name in a Write-Host string (the Invoke-PWADiscovery.ps1 pattern). R43 MUST fire.
+        mustFire: ['R43'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R43-replacement-cmdlet.ps1'),
+        label: 'probe-R43-replacement-cmdlet',
+        // TN: Register-PnPEntraIDAppForInteractiveLogin (replacement). R43 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R43'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R43-in-comment.ps1'),
+        label: 'probe-R43-in-comment',
+        // TN: cmdlet name on a full-line # comment -- strippedContent strips it. R43 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R43'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R44 -- OData v4 type-cast syntax on SharePoint/ProjectServer REST endpoint (P8)
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R44-typecast-on-projectserver.ps1'),
+        label: 'probe-R44-typecast-on-projectserver',
+        // TP: Microsoft.SharePoint.Lookup/ in $select on ProjectServer URL. R44 MUST fire.
+        mustFire: ['R44'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R44-typecast-in-filter-api-web.ps1'),
+        label: 'probe-R44-typecast-in-filter-api-web',
+        // TP: SP.Data.TasksListItem/ in $filter on /_api/web/ URL. R44 MUST fire.
+        mustFire: ['R44'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R44-typecast-on-dataverse.ps1'),
+        label: 'probe-R44-typecast-on-dataverse',
+        // TN: OData v4 type cast on /api/data/v9.2/... (Dataverse URL). R44 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R44'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R44-plain-select-on-projectserver.ps1'),
+        label: 'probe-R44-plain-select-on-projectserver',
+        // TN: $select=Title,Description (no type cast) on ProjectServer URL. R44 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R44'],
+        expectClean: true
+    },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -153,6 +153,11 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R36 | regex | ERROR | `[datetime]::TryParse($s, [ref]$null)` 2-argument form with `[ref]$null`; the parsed `DateTime` value is unreachable, and on .NET 7+ the call may resolve to a different overload and fail. See: https://learn.microsoft.com/en-us/dotnet/api/system.datetime.tryparse |
 | R38 | regex (conjunction) | ERROR | Manual `[switch]$WhatIf` parameter without `[CmdletBinding(SupportsShouldProcess=$true)]`. A manual switch does not wire `$WhatIfPreference`, `-Confirm`, or `$PSCmdlet.ShouldProcess()` -- side-effects fire regardless of WhatIf intent. See: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess |
 | R39 | regex | ERROR | Variable followed by colon inside a double-quoted string (e.g., `"$varname: text"` or `"$path:`n"`). PS treats `$varname:` as a scope-qualifier prefix (same as `$env:`, `$script:`, `$global:`); when the character after `:` is not a valid variable-name start, the parser raises a parse-time error and the script cannot load. Legitimate scope qualifiers (`$env:VAR`, `$global:foo`) are not flagged. Fix: `${varname}:`. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules |
+| R40 | regex | ERROR | `Invoke-PnPSPRestMethod -Url` value missing a leading slash (P1). A URL literal that does not start with `/`, `$` (variable), or `http(s)://` is resolved as a relative path, producing a 404 or wrong resource. Fix: prefix with `/`. See: https://pnp.github.io/powershell/cmdlets/Invoke-PnPSPRestMethod.html |
+| R41 | regex | ERROR | Dataverse OData v4 `_<name>_value` lookup suffix in a SharePoint or Project Server REST URL (P2). The `_value` suffix is OData v4 / Dataverse-specific; `/_api/ProjectServer/` and `/_api/web/` endpoints use OData v2/v3 where lookup columns are plain field names. Using `_value` here produces a field-not-found error. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview |
+| R42 | regex (conjunction) | ERROR | `Connect-PnPOnline -DeviceLogin` without `-ClientId` (P3). Since 2024-09-09 the shared PnP Management Shell multi-tenant Entra app was retired; `-ClientId` is now mandatory for device-login flows. Omitting it causes authentication to fail with an AADSTS error. See: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html |
+| R43 | regex | ERROR | `Register-PnPManagementShellAccess` is a removed cmdlet (P4). The shared PnP Management Shell Entra app it consented was retired (2024-09-09); the cmdlet produces `CommandNotFoundException` at runtime. Replacement: `Register-PnPEntraIDAppForInteractiveLogin` or `Register-PnPEntraIDApp`. See: https://pnp.github.io/powershell/articles/registerapplication.html |
+| R44 | regex | ERROR | OData v4 type-cast syntax (`Namespace.Type/` segment in `$select`/`$filter`) on a SharePoint or Project Server REST URL (P8). OData v2/v3 does not parse type-cast segments; using one on `/_api/ProjectServer/` or `/_api/web/` produces a runtime parse error. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
@@ -452,6 +457,119 @@ $msg = "Path ${varname}: more text"
 - **Multi-line concatenated strings:** R39 fires on each line independently. A `$varname:` on a line whose string context spans multiple lines via concatenation (`+`) is detected if the offending segment is a self-contained `"..."` token on that line.
 - **Case-sensitivity:** The pattern is case-sensitive (`gm` flags). Variable names in PowerShell are case-insensitive at runtime but the regex `[A-Za-z_]\w*` covers both cases in the pattern.
 
+
+### R40 -- `Invoke-PnPSPRestMethod -Url` missing leading slash (P1)
+
+`Invoke-PnPSPRestMethod` requires a `-Url` value that begins with a leading slash (e.g., `/_api/ProjectServer/Projects`). PnP resolves the URL relative to the connected SharePoint site root; a value that starts with any character other than `/`, `$` (variable reference), or `http(s)://` (full absolute URL) is treated as a relative path and resolves incorrectly, producing a 404 or hitting an unintended resource. The detection pattern fires on string literals only; variable-reference URLs (`$myUrl`) and full `http(s)://` URLs are not flagged.
+
+**Detection strategy:** Single-pass regex. Matches `Invoke-PnPSPRestMethod` followed by a `-Url` parameter whose string literal does not start with `/`, `$`, or `http(s)://`. Uses negative lookaheads: `(?![/$])` and `(?!https?://)` to exclude the legitimate forms.
+
+Source: https://pnp.github.io/powershell/cmdlets/Invoke-PnPSPRestMethod.html
+
+**Probes:**
+
+- `probe-R40-no-leading-slash.ps1` -- FIRE: `-Url "api/ProjectServer/Projects"` -- no leading slash; treated as relative path
+- `probe-R40-relative-path-no-slash.ps1` -- FIRE: `-Url "_api/web/lists"` -- starts with underscore, no slash
+- `probe-R40-correct-leading-slash.ps1` -- NO FIRE: `-Url "/_api/ProjectServer/Projects"` -- correct leading slash
+- `probe-R40-variable-url.ps1` -- NO FIRE: `-Url $relativeUrl` -- variable reference; rule anchors on string literals only
+- `probe-R40-https-url.ps1` -- NO FIRE: `-Url "https://contoso.sharepoint.com/sites/pwa/_api/web/lists"` -- full absolute URL
+
+**Known limitations:**
+
+- **Variable URL not inspected.** If a variable is assigned a URL without a leading slash and then passed as `-Url $myUrl`, R40 does not fire. Authors should verify variables that feed into `-Url` start with `/`.
+- **Single-quoted string coverage.** The pattern matches both single-quoted and double-quoted string literals.
+
+---
+
+### R41 -- Dataverse `_value` suffix on SharePoint/ProjectServer REST URL (P2)
+
+The Dataverse Web API uses OData v4 where lookup column navigation properties are represented with a `_<name>_value` suffix (e.g., `_ownerid_value`). SharePoint and Project Server REST endpoints (`/_api/ProjectServer/` and `/_api/web/`) use OData v2/v3 where lookup columns are accessed by their plain internal field name (e.g., `Owner`, not `_owner_value`). Mixing the `_value` suffix into a SharePoint/ProjectServer REST `$select` or `$filter` produces a field-not-found error at runtime.
+
+**Detection strategy:** The pattern matches a `_api/ProjectServer` or `_api/web` URL segment followed anywhere on the same line by `_<name>_value`. Uses `[^"\n]*` (not stopping at single quotes) so that URLs with single quotes inside double-quoted strings (e.g., `getbytitle('Tasks')`) are fully matched.
+
+Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview
+
+**Probes:**
+
+- `probe-R41-value-on-projectserver.ps1` -- FIRE: `_owner_value` in a `/_api/ProjectServer/Projects` URL
+- `probe-R41-value-on-api-web.ps1` -- FIRE: `_assignedto_value` in a `/_api/web/lists/getbytitle('Tasks')/items` URL (single-quote URL segment)
+- `probe-R41-value-on-dataverse.ps1` -- NO FIRE: `_ownerid_value` on `/api/data/v9.2/...` (Dataverse URL; `_value` is correct there)
+- `probe-R41-plain-field-on-projectserver.ps1` -- NO FIRE: plain `Owner` field name in `/_api/ProjectServer/` URL (OData v2/v3 correct form)
+
+**Known limitations:**
+
+- **Line-scoped matching.** The `_value` suffix and the `_api/ProjectServer` or `_api/web` segment must appear on the same line. A `_value` suffix on a continuation line is not caught.
+- **Case-sensitive match.** The pattern anchors on lowercase `_[a-z]`. A capitalized variant (e.g., `_Owner_Value`) is not caught.
+
+---
+
+### R42 -- `Connect-PnPOnline -DeviceLogin` without `-ClientId` (P3)
+
+On 2024-09-09, Microsoft retired the shared multi-tenant PnP Management Shell Entra app that device-login flows used by default when no `-ClientId` was specified. After this date, `-ClientId` is mandatory for all device-login flows. Scripts that omit `-ClientId` from a `Connect-PnPOnline -DeviceLogin` call fail at runtime with an AADSTS error (typically `AADSTS65001` -- the app has not been granted consent by the tenant).
+
+**Detection strategy:** Two-step conjunction using `requires_absent`. The main pattern matches `Connect-PnPOnline` with a `-DeviceLogin` parameter on the same line. The `requires_absent` guard checks `rawContentNoBlockComments` for `-ClientId\b`; if `-ClientId` is present anywhere in the file, the guard is satisfied and R42 is suppressed. If `-ClientId` is absent, R42 fires.
+
+**Important:** Probe file comments must not contain `-ClientId` to avoid triggering the `requires_absent` guard -- the guard tests all non-block-comment text including line comments. This is the same behavior as R38's `SupportsShouldProcess` guard.
+
+Source: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html
+
+**Probes:**
+
+- `probe-R42-devicelogin-no-clientid.ps1` -- FIRE: `-DeviceLogin` with no `-ClientId` anywhere in the file
+- `probe-R42-devicelogin-with-tenant-no-clientid.ps1` -- FIRE: `-DeviceLogin -Tenant` present but `-ClientId` absent
+- `probe-R42-devicelogin-with-clientid.ps1` -- NO FIRE: `-DeviceLogin -ClientId "..."` (correct post-2024-09-09 form)
+- `probe-R42-interactive-no-clientid.ps1` -- NO FIRE: `-Interactive` auth (different flow); R42 anchors on `-DeviceLogin` only
+
+**Known limitations:**
+
+- **File-wide `-ClientId` check.** If `-ClientId` appears anywhere in the file (even in a different call), all `-DeviceLogin` instances are suppressed. A script with one guarded and one unguarded `-DeviceLogin` call will not fire R42 on the unguarded call.
+- **Case-sensitive.** The pattern is case-sensitive (`gm` flags). `-devicelogin` (lowercase) is not caught.
+
+---
+
+### R43 -- `Register-PnPManagementShellAccess` is a removed cmdlet (P4)
+
+`Register-PnPManagementShellAccess` was a PnP.PowerShell cmdlet that registered the shared multi-tenant PnP Management Shell Entra app for tenant-wide admin consent. That shared app was retired on 2024-09-09. The cmdlet itself has been removed from PnP.PowerShell 2.x; calling it produces a `CommandNotFoundException` at runtime. The replacement is `Register-PnPEntraIDAppForInteractiveLogin` (for interactive auth) or `Register-PnPEntraIDApp` (for app-only auth).
+
+**Detection strategy:** Simple word-boundary regex. The pattern `\bRegister-PnPManagementShellAccess\b` matches anywhere in `strippedContent` (full-line comments stripped). Zero false-positive risk from the cmdlet name itself. A cmdlet name appearing in a `Write-Host` string (as in an error-handler that tells users to run it) is intentionally flagged -- the advice it gives is invalid and the remediation path in the source code requires updating.
+
+Source: https://pnp.github.io/powershell/articles/registerapplication.html
+
+**Probes:**
+
+- `probe-R43-basic-trigger.ps1` -- FIRE: bare `Register-PnPManagementShellAccess` statement
+- `probe-R43-in-write-host.ps1` -- FIRE: cmdlet name inside a `Write-Host "  Register-PnPManagementShellAccess"` string (the `Invoke-PWADiscovery.ps1` pattern)
+- `probe-R43-replacement-cmdlet.ps1` -- NO FIRE: `Register-PnPEntraIDAppForInteractiveLogin` (different name; not matched)
+- `probe-R43-in-comment.ps1` -- NO FIRE: cmdlet name on a full-line `#` comment; `strippedContent` strips it before matching
+
+**Known limitations:**
+
+- **Full-line comment safe, inline comment not safe.** A full-line `# Previously: Register-PnPManagementShellAccess` does not fire (stripped). A trailing inline comment would fire because `strippedContent` does not strip inline comments.
+
+---
+
+### R44 -- OData v4 type-cast syntax on SharePoint/ProjectServer REST endpoint (P8)
+
+OData v4 supports type-cast segments in URL paths: `Namespace.Type/` before a property name (e.g., `/Microsoft.Dynamics.CRM.DecimalAttributeMetadata` in a Dataverse URL). SharePoint and Project Server REST endpoints (`/_api/ProjectServer/` and `/_api/web/`) implement OData v2/v3 which does not parse type-cast segments. Using a `Namespace.Type/` segment in `$select` or `$filter` on a `/_api/ProjectServer/` or `/_api/web/` URL produces a parse error at runtime (HTTP 400 or similar).
+
+**Detection strategy:** The pattern matches a `_api/ProjectServer` or `_api/web` URL segment, followed on the same line by a `$select` or `$filter` query parameter, followed by a `Namespace.Type/` segment. Uses `[^"\n]*` so single quotes inside double-quoted strings do not terminate the match.
+
+Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview
+
+**Probes:**
+
+- `probe-R44-typecast-on-projectserver.ps1` -- FIRE: `Microsoft.SharePoint.Lookup/` in `$select` on `/_api/ProjectServer/Projects`
+- `probe-R44-typecast-in-filter-api-web.ps1` -- FIRE: `SP.Data.TasksListItem/` in `$filter` on `/_api/web/lists/getbytitle('Tasks')/items`
+- `probe-R44-typecast-on-dataverse.ps1` -- NO FIRE: `Microsoft.Dynamics.CRM.Account/` in `$select` on `/api/data/v9.2/` (Dataverse URL; v4 type casts are correct there)
+- `probe-R44-plain-select-on-projectserver.ps1` -- NO FIRE: `$select=Title,Description,StartDate` on `/_api/ProjectServer/` (plain fields, no type cast)
+
+**Known limitations:**
+
+- **Line-scoped matching.** The type-cast segment and the `_api/` URL prefix must appear on the same line.
+- **Namespace.Type heuristic.** The pattern requires at least one dot between two letter sequences followed by a slash. A type-cast without a dot would not match, but in practice OData v4 type casts always include a namespace.
+
+---
+
 ### module-env-mismatch — module imported without required runtime directive
 
 Some PowerShell modules are incompatible with PowerShell Core (pwsh 7 / .NET). When imported under the wrong runtime, these modules fail silently — the module appears to load but cmdlets are missing or the process exits without a diagnostic error. The `#Requires -PSEdition Desktop` directive is the only mechanism that fails fast (at parse time, before any code runs) when the script is launched under the wrong runtime.
@@ -733,7 +851,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **100 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.4.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.4.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the v0.4.1 block-comment guard fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the v0.4.2 module-env-mismatch block-comment fix; the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern; and the v0.5.2 extractor here-string JSON-shape guard probes (prose-no-fire / empty-no-fire / valid-json-regression / json-with-interpolation / malformed-json / interpolation-herestring) that pin the false-positive fix and confirm JSON-shaped-but-broken bodies still error.
+- **120 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.4.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.4.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the v0.4.1 block-comment guard fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the v0.4.2 module-env-mismatch block-comment fix; the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern; and the v0.5.2 extractor here-string JSON-shape guard probes (prose-no-fire / empty-no-fire / valid-json-regression / json-with-interpolation / malformed-json / interpolation-herestring) that pin the false-positive fix and confirm JSON-shaped-but-broken bodies still error.
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.
