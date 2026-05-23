@@ -82,7 +82,7 @@ console.log("Running Fail Battery...");
             const knownValidRules = [
                 ...expectedRules,
                 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch',
-                'R32', 'R33', 'R34', 'R35', 'R36', 'R37', 'R38'
+                'R32', 'R33', 'R34', 'R35', 'R36', 'R37', 'R38', 'R39'
             ];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
@@ -1082,6 +1082,130 @@ const probes = [
         // which is the bare-name form. R38 MUST NOT fire.
         mustFire: [],
         mustNotFire: ['R38'],
+        expectClean: true
+    },
+
+    // =========================================================================
+    // R39 -- Variable followed by colon in double-quoted string (scope-qualifier parse trap)
+    // PS 5.1 (and all PS versions) treat $varname: inside a double-quoted string as a
+    // scope-qualifier prefix (same as $env:, $script:, $global:). When the character
+    // after the colon is not a valid variable-name start (letter, digit, underscore, or
+    // opening brace for ${...}), the parser raises at parse time:
+    //   "Variable reference is not valid. ':' was not followed by a valid variable name
+    //    character. Consider using ${} to delimit the name."
+    // The script cannot load or run. Fix: use ${varname}: to delimit the variable name.
+    //
+    // Incident origin: build_avinext_bundle.ps1 line 513 (AdvAccel session 2026-05-09):
+    //   $msg = "Invoke-ZipIntegrityGate FAILED on $ZipPath:`n" + ...
+    // PS 5.1 read $ZipPath: as a scope-qualifier prefix; backtick is not a valid
+    // variable-name start char -> parse error. Fix: ${ZipPath}:.
+    //
+    // Substrate citations:
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules
+    //     "This is especially important if the variable name is followed by a colon (:).
+    //      PowerShell considers everything between the $ and the : a scope specifier,
+    //      typically causing the interpretation to fail. For example, \"$HOME: where the
+    //      heart is.\" throws an error, but \"${HOME}: where the heart is.\" works as
+    //      intended."
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_variables
+    //     Scope modifiers confirmed: $Global:, $Local:, $Private:, $Script:, $Using:,
+    //     plus provider paths $env:, $variable:, $function:, $alias:.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R39-colon-space.ps1'),
+        label: 'probe-R39-colon-space',
+        // Probe 1 (FIRE): $varname: followed by space -- literal colon after variable
+        // name. The char after ':' is space, not in [A-Za-z0-9_{]. R39 MUST fire.
+        mustFire: ['R39'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-colon-backtick-escape.ps1'),
+        label: 'probe-R39-colon-backtick-escape',
+        // Probe 2 (FIRE): $ZipPath:`n -- colon followed by backtick escape sequence.
+        // The exact incident: build_avinext_bundle.ps1 L513. Backtick is not a valid
+        // variable-name start char. R39 MUST fire.
+        mustFire: ['R39'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-colon-second-colon.ps1'),
+        label: 'probe-R39-colon-second-colon',
+        // Probe 3 (FIRE): "Result: $count: items" -- double-colon pattern.
+        // Space after the second colon is not a valid variable-name start char.
+        // R39 MUST fire.
+        mustFire: ['R39'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-colon-end-of-string.ps1'),
+        label: 'probe-R39-colon-end-of-string',
+        // Probe 4 (FIRE): "User $username:" -- colon immediately before closing quote.
+        // The closing quote is not a valid variable-name start char. R39 MUST fire.
+        mustFire: ['R39'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-env-scope-qualifier.ps1'),
+        label: 'probe-R39-env-scope-qualifier',
+        // Probe 5 (NO FIRE): $env:USERNAME outside a double-quoted string.
+        // The pattern anchors on "..." double-quote delimiters; this assignment is
+        // outside a string. R39 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R39'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-curly-brace-fix.ps1'),
+        label: 'probe-R39-curly-brace-fix',
+        // Probe 6 (NO FIRE): ${ZipPath}:`n -- the canonical fix form.
+        // ${...} starts with ${ so \$[A-Za-z_] does not match ($ is followed by {,
+        // not a letter). R39 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R39'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-single-quoted-no-expand.ps1'),
+        label: 'probe-R39-single-quoted-no-expand',
+        // Probe 7 (NO FIRE): Single-quoted string -- no expansion; no parse error.
+        // The rule pattern anchors on double-quote delimiters; single-quote strings
+        // do not match. R39 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R39'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-global-scope-in-string.ps1'),
+        label: 'probe-R39-global-scope-in-string',
+        // Probe 8 (NO FIRE): "$global:foo" -- legitimate $global: scope qualifier inside
+        // a double-quoted string. The char after ':' is 'f' (in [A-Za-z0-9_{]), so the
+        // negative lookahead suppresses. R39 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R39'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-script-scope-in-string.ps1'),
+        label: 'probe-R39-script-scope-in-string',
+        // Probe 9 (NO FIRE): "$script:bar" -- legitimate $script: scope qualifier inside
+        // a double-quoted string. Char after ':' is 'b' (in [A-Za-z0-9_{]), lookahead
+        // suppresses. R39 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R39'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R39-comment-no-fire.ps1'),
+        label: 'probe-R39-comment-no-fire',
+        // Probe 10 (NO FIRE): $varname: appears only in a full-line # comment.
+        // strippedContent strips full-line comments before matching. R39 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R39'],
         expectClean: true
     }
 ];

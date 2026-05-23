@@ -173,5 +173,20 @@
     ],
     "message": "Manual [switch]$WhatIf detected without [CmdletBinding(SupportsShouldProcess=$true)]. A manual switch does not wire $WhatIfPreference, -Confirm, or $PSCmdlet.ShouldProcess() -- side-effects will fire regardless of WhatIf intent. Add [CmdletBinding(SupportsShouldProcess=$true)] and gate all writes through $PSCmdlet.ShouldProcess(). See: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess",
     "enabled": true
+  },
+  {
+    "id": "R39",
+    "title": "Variable followed by colon in double-quoted string -- scope-qualifier parse trap",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\"[^\"\\r\\n]*\\$[A-Za-z_]\\w*:(?![A-Za-z0-9_{])[^\"\\r\\n]*\"",
+    "description": "Inside a double-quoted string, PowerShell treats $varname: as a scope-qualifier prefix (e.g., $env:, $script:, $global:). When the character after the colon is not a valid variable-name start (letter, digit, underscore, or opening brace), the parser raises: 'Variable reference is not valid. \":\" was not followed by a valid variable name character. Consider using ${} to delimit the name.' The script cannot load or run. Canonical fix: replace $varname: with ${varname}: -- the curly-brace form makes the colon literal and the variable name is unambiguous. Substrate citation: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules -- 'This is especially important if the variable name is followed by a colon (:). PowerShell considers everything between the $ and the : a scope specifier, typically causing the interpretation to fail. For example, \"$HOME: where the heart is.\" throws an error, but \"${HOME}: where the heart is.\" works as intended.'",
+    "remediation": "Replace $varname: with ${varname}: inside the double-quoted string to make the colon literal. Example: \"FAILED on $ZipPath:`n\" becomes \"FAILED on ${ZipPath}:`n\".",
+    "references": [
+      "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules",
+      "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_variables"
+    ],
+    "message": "Variable followed by colon inside double-quoted string (e.g., \"$varname: text\"). PowerShell parses $varname: as a scope-qualifier prefix and raises a parse-time error when the char after \":\" is not a valid variable-name start. The script cannot load. Fix: use ${varname}: to delimit the variable name and make \":\" literal. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules",
+    "enabled": true
   }
 ]
