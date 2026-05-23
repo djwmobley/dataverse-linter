@@ -180,13 +180,59 @@
     "severity": "ERROR",
     "type": "regex",
     "pattern": "\"[^\"\\r\\n]*\\$[A-Za-z_]\\w*:(?![A-Za-z0-9_{])[^\"\\r\\n]*\"",
-    "description": "Inside a double-quoted string, PowerShell treats $varname: as a scope-qualifier prefix (e.g., $env:, $script:, $global:). When the character after the colon is not a valid variable-name start (letter, digit, underscore, or opening brace), the parser raises: 'Variable reference is not valid. \":\" was not followed by a valid variable name character. Consider using ${} to delimit the name.' The script cannot load or run. Canonical fix: replace $varname: with ${varname}: -- the curly-brace form makes the colon literal and the variable name is unambiguous. Substrate citation: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules -- 'This is especially important if the variable name is followed by a colon (:). PowerShell considers everything between the $ and the : a scope specifier, typically causing the interpretation to fail. For example, \"$HOME: where the heart is.\" throws an error, but \"${HOME}: where the heart is.\" works as intended.'",
+    "description": "Inside a double-quoted string, PowerShell treats $varname: as a scope-qualifier prefix (e.g., $env:, $script:, $global:). When the character after the colon is not a valid variable-name start (letter, digit, underscore, or opening brace for ${...}), the parser raises: 'Variable reference is not valid. \":\" was not followed by a valid variable name character. Consider using ${} to delimit the name.' The script cannot load or run. Canonical fix: replace $varname: with ${varname}: -- the curly-brace form makes the colon literal and the variable name is unambiguous. Substrate citation: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules -- 'This is especially important if the variable name is followed by a colon (:). PowerShell considers everything between the $ and the : a scope specifier, typically causing the interpretation to fail. For example, \"$HOME: where the heart is.\" throws an error, but \"${HOME}: where the heart is.\" works as intended.'",
     "remediation": "Replace $varname: with ${varname}: inside the double-quoted string to make the colon literal. Example: \"FAILED on $ZipPath:`n\" becomes \"FAILED on ${ZipPath}:`n\".",
     "references": [
       "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules",
       "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_variables"
     ],
     "message": "Variable followed by colon inside double-quoted string (e.g., \"$varname: text\"). PowerShell parses $varname: as a scope-qualifier prefix and raises a parse-time error when the char after \":\" is not a valid variable-name start. The script cannot load. Fix: use ${varname}: to delimit the variable name and make \":\" literal. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules",
+    "enabled": true
+  },
+  {
+    "id": "R40",
+    "title": "Invoke-PnPSPRestMethod -Url missing leading slash (P1)",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "Invoke-PnPSPRestMethod\\b[^\\n]*-Url\\s+[\"'](?![/$])(?!https?:\\/\\/)[^\"'\\n]+[\"']",
+    "message": "Invoke-PnPSPRestMethod -Url value is missing a leading slash. PnP resolves -Url relative to the SharePoint site root only when it starts with '/'; a string that begins with a non-slash non-variable character is treated as a relative path and resolves incorrectly, producing a 404 or hitting the wrong resource. Fix: use -Url '/_api/...' (leading slash required). See: https://pnp.github.io/powershell/cmdlets/Invoke-PnPSPRestMethod.html",
+    "enabled": true
+  },
+  {
+    "id": "R41",
+    "title": "Dataverse _value suffix on SharePoint/ProjectServer REST URL (P2)",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "(?:_api/ProjectServer|_api/web)[^\"\\n]*_[a-z][a-z0-9_]+_value",
+    "message": "A Dataverse OData v4 '_<name>_value' lookup suffix appears in a SharePoint/Project Server REST URL. The '_value' suffix is specific to Dataverse Web API (OData v4); SharePoint and Project Server REST use OData v2/v3 where lookup columns are addressed by their plain field name (e.g., 'Owner', not '_owner_value'). Using '_value' on a /_api/ProjectServer/ or /_api/web/ endpoint produces a field-not-found error at runtime. Remove the '_value' suffix and use the plain OData v2/v3 field name. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview",
+    "enabled": true
+  },
+  {
+    "id": "R42",
+    "title": "Connect-PnPOnline -DeviceLogin without -ClientId (P3)",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "Connect-PnPOnline\\b[^\\n]*-DeviceLogin\\b",
+    "requires_absent": "-ClientId\\b",
+    "message": "Connect-PnPOnline -DeviceLogin is used without -ClientId. Since 2024-09-09 the shared PnP Management Shell multi-tenant Entra app was retired; -ClientId is now mandatory for all interactive and device-login authentication flows. Omitting -ClientId causes authentication to fail at runtime with an AADSTS error. Fix: register your own Entra app and supply -ClientId <your-app-id>. See: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html",
+    "enabled": true
+  },
+  {
+    "id": "R43",
+    "title": "Register-PnPManagementShellAccess is a removed cmdlet (P4)",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "\\bRegister-PnPManagementShellAccess\\b",
+    "message": "Register-PnPManagementShellAccess has been removed from PnP.PowerShell. The shared multi-tenant PnP Management Shell Entra app it used to consent has been retired (2024-09-09). Using this cmdlet produces a CommandNotFoundException at runtime. The replacement is Register-PnPEntraIDAppForInteractiveLogin or Register-PnPEntraIDApp for registering your own app. See: https://pnp.github.io/powershell/articles/registerapplication.html",
+    "enabled": true
+  },
+  {
+    "id": "R44",
+    "title": "OData v4 type-cast syntax on SharePoint/ProjectServer REST endpoint (P8)",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "(?:_api/ProjectServer|_api/web)[^\"\\n]*(?:\\$select|\\$filter)[^\"\\n]*[A-Za-z]+\\.[A-Za-z]+/",
+    "message": "OData v4 type-cast syntax ('Namespace.Type/' segment in $select or $filter) appears in a SharePoint or Project Server REST URL. SharePoint and Project Server REST use OData v2/v3 which does not support type-cast segments; using 'Namespace.Type/' in a $select or $filter on a /_api/ProjectServer/ or /_api/web/ URL produces a parse error at runtime. Type casts in this form are a Dataverse OData v4 pattern and must not be used against SharePoint/ProjectServer endpoints. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview",
     "enabled": true
   }
 ]
