@@ -304,14 +304,24 @@ function extract(filePath) {
 
     const payloads = [];
     const parseErrors = [];
-    
+
     // Match both @"..."@ and @'...'@
+    // Per about_Quoting_Rules (https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules):
+    // here-strings hold arbitrary literal text and are NOT necessarily JSON.
+    // Only attempt JSON.parse when the trimmed body is JSON-shaped (starts with { or [).
+    // Prose here-strings (e.g. module descriptions, multi-line messages) are silently skipped.
     const payloadRegex = /@("|')([\s\S]*?)\1@/g;
     let match;
     while ((match = payloadRegex.exec(content)) !== null) {
         const quoteType = match[1];
         const jsonStr = match[2].trim();
-        
+
+        // Skip non-JSON-shaped here-strings (prose, empty, or whitespace-only bodies).
+        // A JSON-shaped here-string must begin with { (object) or [ (array).
+        if (jsonStr.length === 0 || (jsonStr[0] !== '{' && jsonStr[0] !== '[')) {
+            continue;
+        }
+
         try {
             const parsed = JSON.parse(jsonStr);
             payloads.push(parsed);

@@ -133,14 +133,14 @@ const probes = [
     {
         file: path.join(__dirname, 'probe-here-string-singlequote.ps1'),
         label: 'probe-here-string-singlequote',
-        // The probe was written to document that single-quote here-strings were not parsed.
-        // The extractor now handles both @"..."@ and @'...'@ (payloadRegex uses both quote
-        // types). The probe's single-quote payload is parsed; payload rules fire.
-        // extractor-json-error fires (two: the single-quote body fails JSON.parse with '...'
-        // placeholders from noCommentNoStringContent); R18, odata-bind-guid, optionset-coverage
-        // also fire from the parsed payload.
-        mustFire: ['extractor-json-error', 'R18', 'odata-bind-guid', 'optionset-coverage'],
-        mustNotFire: [],
+        // The probe verifies that single-quote here-strings containing JSON are parsed.
+        // After the extractor prose-skip fix (v0.5.2): the comment-line @'...'@ tokens
+        // (which are prose, not JSON) are silently skipped; the real @'...'@ here-string
+        // body is JSON-shaped ({) and is parsed successfully. extractor-json-error must
+        // NOT fire (regression guard: prose here-strings no longer produce false errors).
+        // The three payload rules still fire from the parsed JSON body.
+        mustFire: ['R18', 'odata-bind-guid', 'optionset-coverage'],
+        mustNotFire: ['extractor-json-error'],
         expectClean: false
     },
     {
@@ -1207,6 +1207,78 @@ const probes = [
         mustFire: [],
         mustNotFire: ['R39'],
         expectClean: true
+    },
+    // =========================================================================
+    // Extractor prose-skip fix (v0.5.2): here-strings with non-JSON-shaped bodies
+    // must not produce extractor-json-error. Only bodies whose first non-whitespace
+    // character is { or [ are passed to JSON.parse.
+    //
+    // Substrate citation:
+    //   - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules
+    //     "Here-strings" section: here-strings hold arbitrary literal text and are
+    //     NOT necessarily JSON. Quoting rules confirm that @"..."@ and @'...'@ are
+    //     general-purpose multi-line string literals used for prose, scripts, XML,
+    //     and any other content -- not just data payloads.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-extractor-prose-doublequote.ps1'),
+        label: 'probe-extractor-prose-doublequote',
+        // Probe 1: Prose @"..."@ here-string (starts with 'P', not { or [).
+        // Non-JSON-shaped body must be silently skipped. extractor-json-error MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['extractor-json-error'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-extractor-prose-singlequote.ps1'),
+        label: 'probe-extractor-prose-singlequote',
+        // Probe 2: Prose @'...'@ here-string (starts with 'M', not { or [).
+        // Single-quote form must also be silently skipped. extractor-json-error MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['extractor-json-error'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-extractor-json-object.ps1'),
+        label: 'probe-extractor-json-object',
+        // Probe 3 (regression guard): Valid JSON object @"{ ... }"@.
+        // JSON-shaped body (starts with {) must still be parsed into payloads.
+        // extractor-json-error MUST NOT fire; parsed payload is available to rules.
+        // The guard if ($null -eq $existing) satisfies R28. No other violations.
+        mustFire: [],
+        mustNotFire: ['extractor-json-error'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-extractor-json-array.ps1'),
+        label: 'probe-extractor-json-array',
+        // Probe 4 (regression guard): Valid JSON array @"[ ... ]"@.
+        // Array-shaped body (starts with [) must still be parsed into payloads.
+        // extractor-json-error MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['extractor-json-error'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-extractor-json-malformed.ps1'),
+        label: 'probe-extractor-json-malformed',
+        // Probe 5: JSON-shaped but malformed @"{ broken "@.
+        // Starts with { so JSON.parse is attempted; parse fails; extractor-json-error MUST fire.
+        // Pins that the prose-skip fix does NOT suppress real broken JSON payloads.
+        mustFire: ['extractor-json-error'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-extractor-json-interpolation.ps1'),
+        label: 'probe-extractor-json-interpolation',
+        // Probe 6: JSON-shaped @"..."@ with $() PS interpolation and an @odata.type key.
+        // The "@ inside the body causes payloadRegex to terminate early (known regex limit);
+        // the resulting broken JSON contains $( so the interpolation-specific error fires.
+        // Pins that the interpolation detection path survives the prose-skip fix.
+        mustFire: ['extractor-json-error'],
+        mustNotFire: [],
+        expectClean: false
     }
 ];
 
