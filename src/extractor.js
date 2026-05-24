@@ -322,6 +322,33 @@ function extract(filePath) {
             continue;
         }
 
+        // Additional guard for '['-opening bodies: a C# here-string body such as
+        //   [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        //   public static extern bool SetDllDirectory(string lpPathName);
+        // trims to '[DllImport...' and would otherwise reach JSON.parse.
+        //
+        // In a valid JSON array the first non-whitespace char after '[' is one of:
+        //   " (string element), { (object element), [ (nested array), 0-9 (number),
+        //   ] (empty array close), t/f/n (true/false/null literals).
+        //
+        // A C# attribute starts with an uppercase or lowercase letter that is NOT
+        // one of the above (e.g. 'D' in DllImport, 'S' in StructLayout, 'O' in Out).
+        //
+        // Known limitation: a '[t...]', '[f...]', or '[n...]' C# attribute (highly
+        // unlikely in practice) would pass this guard and fail JSON.parse cleanly --
+        // no change to the error path, just one extra JSON.parse call.
+        if (jsonStr[0] === '[') {
+            const afterBracket = jsonStr.slice(1).trimStart();
+            if (afterBracket.length === 0) {
+                // '[' followed only by whitespace -- not a valid JSON array
+                continue;
+            }
+            // JSON array element-start chars (RFC 8259 value productions)
+            if (!/^["{\[0-9\]tfn]/.test(afterBracket[0])) {
+                continue;
+            }
+        }
+
         try {
             const parsed = JSON.parse(jsonStr);
             payloads.push(parsed);
