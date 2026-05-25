@@ -1280,8 +1280,36 @@ const probes = [
         mustFire: ['extractor-json-error'],
         mustNotFire: [],
         expectClean: false
-    }
-,
+    },
+
+    // =========================================================================
+    // extractor C# attribute guard (v0.6.1)
+    // A here-string body starting with [DllImport (or any C# attribute) must NOT
+    // trigger extractor-json-error. The guard checks that the first non-whitespace
+    // char after '[' is a JSON array element-start char; 'D' is not, so skipped.
+    // Regression: valid JSON arrays starting with '[' must still be parsed.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-extractor-cs-attribute-no-fire.ps1'),
+        label: 'probe-extractor-cs-attribute-no-fire',
+        // C# P/Invoke here-string body: [DllImport("kernel32.dll", ...)]
+        // After trim(), first char is '[', first char after '[' is 'D' -- not a JSON
+        // array value-start. Guard skips it. extractor-json-error MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['extractor-json-error'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-extractor-json-array-still-parsed.ps1'),
+        label: 'probe-extractor-json-array-still-parsed',
+        // Regression guard: valid JSON array @"[{ ... }]"@.
+        // First char after '[' is '{' -- a JSON element-start. Guard passes.
+        // extractor-json-error MUST NOT fire (successful parse).
+        mustFire: [],
+        mustNotFire: ['extractor-json-error'],
+        expectClean: false
+    },
+
     // =========================================================================
     // v0.6.0 R40-R44 -- PWA / PnP / Project Server REST rule family
     // P1 = R40, P2 = R41, P3 = R42, P4 = R43, P8 = R44
