@@ -83,7 +83,7 @@ console.log("Running Fail Battery...");
                 ...expectedRules,
                 'schema-entity-not-found', 'R29', 'R31', 'module-env-mismatch',
                 'R32', 'R33', 'R34', 'R35', 'R36', 'R37', 'R38', 'R39',
-                'R40', 'R41', 'R42', 'R43', 'R44'
+                'R40', 'R41', 'R42', 'R43', 'R44', 'R45'
             ];
             const seenRules = extractRuleIds(output);
             const unexpected = [...seenRules].filter(r => !knownValidRules.includes(r));
@@ -1480,6 +1480,178 @@ const probes = [
         mustFire: [],
         mustNotFire: ['R44'],
         expectClean: true
+    },
+
+    // =========================================================================
+    // R45 -- Statement keyword inside grouping operator '(...)' (v0.7.0)
+    //
+    // The grouping operator ( ) treats its content as a command or expression.
+    // A statement keyword (if, foreach, for, while, switch, do, trap) placed
+    // immediately after '(' is parsed as a COMMAND NAME at runtime, producing:
+    //   "The term '<kw>' is not recognized as a name of a cmdlet, ..."
+    // This class is invisible to parse-check tools ([Parser]::ParseInput
+    // returns 0 errors); only execution or a dedicated pattern rule catches it.
+    // The fix is the subexpression operator $( ) which is designed for
+    // statement-holding contexts. The array subexpression @( ) is also valid.
+    //
+    // Detection: regex on strippedContent. The lookbehind (?<![$@\w]) ensures
+    // the ( is not preceded by $ (subexpression), @ (array subexpression), or
+    // a word character (cmdlet/variable name immediately before the paren).
+    // The keyword alternation matches immediately inside the ( with optional
+    // whitespace before the keyword. Full-line comments are stripped before
+    // matching (strippedContent), so (if ...) in a comment does NOT fire.
+    //
+    // Documented false positive: (if ...) inside a string literal fires because
+    // strippedContent does not strip string content. This is consistent with
+    // R33, R34, and other regex rules in this linter.
+    //
+    // Citations:
+    //   - about_Operators, grouping operator ( ) section:
+    //     "allows you to let output from a *command* participate in an expression"
+    //   - about_Operators, subexpression operator $( ) section:
+    //     "Returns the result of one or more statements."
+    //     https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators
+    //   - about_If: confirms if is a language statement keyword, not a command.
+    //     https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_if
+    // =========================================================================
+
+    // TP probes: rule MUST fire
+    {
+        file: path.join(__dirname, 'probe-R45-if-grouping-fire.ps1'),
+        label: 'probe-R45-if-grouping-fire',
+        // TP 1: (if ...) -- canonical antipattern. Runtime: "term 'if' not recognized."
+        // R45 MUST fire.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-foreach-grouping-fire.ps1'),
+        label: 'probe-R45-foreach-grouping-fire',
+        // TP 2: ( foreach ...) with leading space inside paren. R45 MUST fire.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-switch-grouping-fire.ps1'),
+        label: 'probe-R45-switch-grouping-fire',
+        // TP 3: (switch ...) -- switch is a statement keyword; fails at runtime.
+        // R45 MUST fire.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-while-grouping-fire.ps1'),
+        label: 'probe-R45-while-grouping-fire',
+        // TP 4: (while ...) -- while is a statement keyword; fails at runtime.
+        // R45 MUST fire.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-backtick-param-fire.ps1'),
+        label: 'probe-R45-backtick-param-fire',
+        // TP 5: Backtick line continuation before the antipattern line.
+        // -DumpFile on one line, then (if ...) on the next. The ( is still
+        // the grouping operator; the keyword follows on the same line as (.
+        // R45 MUST fire.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-real-bug-fire.ps1'),
+        label: 'probe-R45-real-bug-fire',
+        // TP 6: The exact real-world motivating case -- -DumpFile (if (...) { ... } else { ... }).
+        // This is the pattern from an AdvAccel script that failed at runtime.
+        // R45 MUST fire. Regression anchor for the motivating defect.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+
+    // TN probes: rule MUST NOT fire
+    {
+        file: path.join(__dirname, 'probe-R45-subexpr-no-fire.ps1'),
+        label: 'probe-R45-subexpr-no-fire',
+        // TN 1: $(if ...) -- subexpression operator prefix. Correct form.
+        // The fixed version of TP 1. R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-real-bug-fixed-no-fire.ps1'),
+        label: 'probe-R45-real-bug-fixed-no-fire',
+        // TN 2: $(if (...) { ... } else { ... }) -- fixed real-world bug line.
+        // -DumpFile $(if ...) is the canonical fix. R45 MUST NOT fire.
+        // Regression anchor: pins that the fix form does NOT fire R45.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-array-subexpr-no-fire.ps1'),
+        label: 'probe-R45-array-subexpr-no-fire',
+        // TN 3: @(if ...) -- array subexpression operator. Also legally holds statements.
+        // R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-normal-statement-no-fire.ps1'),
+        label: 'probe-R45-normal-statement-no-fire',
+        // TN 4: Normal statement forms: if ($x) { ... }, foreach ($i in ...) { ... }, etc.
+        // The keyword comes BEFORE the paren, not inside a grouping operator.
+        // R45 MUST NOT fire. Clean probe.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-cmdlet-paren-no-fire.ps1'),
+        label: 'probe-R45-cmdlet-paren-no-fire',
+        // TN 5: (Get-Foo) -- legitimate grouping of a cmdlet/expression.
+        // R45 MUST NOT fire. Clean probe.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-comment-no-fire.ps1'),
+        label: 'probe-R45-comment-no-fire',
+        // TN 6: (if ...) only in a full-line # comment. strippedContent strips
+        // full-line comments before matching. R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-variable-ifconfig-no-fire.ps1'),
+        label: 'probe-R45-variable-ifconfig-no-fire',
+        // TN 7: ($ifConfig.name) -- variable name starts with 'if' but the
+        // paren wraps a variable reference, not a statement keyword.
+        // The pattern matches the keyword only when NOT preceded by $ (captured
+        // by the lookbehind (?<![$@\w])). R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-string-literal-fp.ps1'),
+        label: 'probe-R45-string-literal-fp',
+        // DOCUMENTED FALSE POSITIVE: (if ...) inside a double-quoted string literal.
+        // strippedContent does NOT strip string content (consistent with R33, R34).
+        // R45 fires on the string literal. This probe anchors the known limitation
+        // so any future string-stripping change causes a battery signal.
+        // EXPECTED: R45 fires (false positive accepted; no runtime consequence).
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
     },
 
 ];
