@@ -158,6 +158,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R42 | regex (conjunction) | ERROR | `Connect-PnPOnline -DeviceLogin` without `-ClientId` (P3). Since 2024-09-09 the shared PnP Management Shell multi-tenant Entra app was retired; `-ClientId` is now mandatory for device-login flows. Omitting it causes authentication to fail with an AADSTS error. See: https://pnp.github.io/powershell/cmdlets/Connect-PnPOnline.html |
 | R43 | regex | ERROR | `Register-PnPManagementShellAccess` is a removed cmdlet (P4). The shared PnP Management Shell Entra app it consented was retired (2024-09-09); the cmdlet produces `CommandNotFoundException` at runtime. Replacement: `Register-PnPEntraIDAppForInteractiveLogin` or `Register-PnPEntraIDApp`. See: https://pnp.github.io/powershell/articles/registerapplication.html |
 | R44 | regex | ERROR | OData v4 type-cast syntax (`Namespace.Type/` segment in `$select`/`$filter`) on a SharePoint or Project Server REST URL (P8). OData v2/v3 does not parse type-cast segments; using one on `/_api/ProjectServer/` or `/_api/web/` produces a runtime parse error. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview |
+| R45 | regex | ERROR | Statement keyword (`if`, `foreach`, `for`, `while`, `switch`, `do`, `trap`) inside the grouping operator `(...)`. Per `about_Operators`: the grouping operator `( )` "allows you to let output from a *command* participate in an expression" -- it expects commands/expressions, not statements. A statement keyword inside `( )` is parsed as a command name at runtime and produces "The term 'if' is not recognized as a name of a cmdlet." This class is **invisible to `[Parser]::ParseInput`** (returns 0 errors). The subexpression operator `$( )` is designed for this: it "returns the result of one or more statements." Fix: replace `(if ...)` with `$(if ...)`. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
@@ -567,6 +568,88 @@ Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-q
 
 - **Line-scoped matching.** The type-cast segment and the `_api/` URL prefix must appear on the same line.
 - **Namespace.Type heuristic.** The pattern requires at least one dot between two letter sequences followed by a slash. A type-cast without a dot would not match, but in practice OData v4 type casts always include a namespace.
+
+---
+
+---
+
+### R45 -- Statement keyword inside grouping operator `(...)` (v0.7.0)
+
+R45 fires when a PowerShell statement keyword (`if`, `foreach`, `for`, `while`, `switch`, `do`, `trap`) appears immediately inside the **grouping operator** `( )` -- i.e., when the pattern `(keyword` (with optional whitespace) is not preceded by `$` (subexpression operator) or `@` (array subexpression operator).
+
+**The runtime failure:** The grouping operator `( )` treats its content as a **command or expression**, not a statement list. A statement keyword placed inside `( )` is therefore parsed as a *command name* at execution time. PowerShell raises:
+
+```
+The term 'if' is not recognized as the name of a cmdlet, function, script file,
+or executable program.
+```
+
+**Why linting is necessary:** `[System.Management.Automation.Language.Parser]::ParseInput` returns **0 errors** on this construct. PSScriptAnalyzer does not catch it. The failure is runtime-only, discovered at the point of execution -- which in an automated ALM script may be deep into a deployment operation. A dedicated pattern rule is the only static mechanism that catches this class of defect at author time.
+
+**Canonical example (incident origin):**
+
+```powershell
+# WRONG -- (if) is treated as a command name; fails at runtime:
+Invoke-SomeTool -DumpFile (if (-not [string]::IsNullOrWhiteSpace($RawDumpFolder)) {
+    Join-Path $RawDumpFolder 'rest_x.json'
+} else { '' })
+
+# CORRECT -- $( ) is the subexpression operator; designed for statement results:
+Invoke-SomeTool -DumpFile $(if (-not [string]::IsNullOrWhiteSpace($RawDumpFolder)) {
+    Join-Path $RawDumpFolder 'rest_x.json'
+} else { '' })
+```
+
+**Per `about_Operators` (verified):**
+
+- Grouping operator `( )`: "allows you to let output from a *command* participate in an expression" -- expressions and commands only.
+- Subexpression operator `$( )`: "Returns the result of one or more **statements**." -- explicitly designed for statement-holding contexts.
+- Array subexpression `@( )`: same semantics as `$( )` but always returns an array. Also valid.
+
+**Detection strategy:** Single `regex` rule on `strippedContent`. Pattern: `(?<![$@\w])(\()\s*(if|foreach|for|while|switch|do|trap)\b`. The negative lookbehind `(?<![$@\w])` prevents firing when the `(` is preceded by `$` (subexpression operator `$(...)`), `@` (array subexpression `@(...)`), or a word character (cmdlet name, variable, or identifier immediately before the paren). Full-line comments are stripped before matching.
+
+**Acceptable forms (rule suppressed):**
+
+- `$(if ...)` -- subexpression operator; `$` before `(` satisfies lookbehind.
+- `@(if ...)` -- array subexpression operator; `@` before `(` satisfies lookbehind.
+- `if ($x) { ... }` -- normal statement usage; keyword comes BEFORE the paren.
+- `foreach ($i in ...) { ... }` -- same; keyword before paren.
+- `(Get-ChildItem .).Count` -- grouping operator with a command, not a keyword.
+- `($ifConfig.name)` -- variable reference inside paren; `$` followed by identifier, then `.name`; the pattern does not match (no bare keyword after `(`).
+
+**Antipattern forms (rule fires):**
+
+- `(if ...)` -- keyword immediately after `(`
+- `( foreach ...)` -- keyword after `(` with intervening whitespace
+- `(switch ...)`, `(while ...)`, `(for ...)`, `(do ...)`, `(trap ...)` -- all statement keywords
+
+**Probes:**
+
+- `probe-R45-if-grouping-fire.ps1` -- FIRE: `(if (...) { ... } else { ... })` -- canonical antipattern
+- `probe-R45-foreach-grouping-fire.ps1` -- FIRE: `( foreach ($i in ...) { $i })` -- space before keyword
+- `probe-R45-switch-grouping-fire.ps1` -- FIRE: `(switch ($x) { ... })`
+- `probe-R45-while-grouping-fire.ps1` -- FIRE: `(while ($i -lt 3) { $i++ })`
+- `probe-R45-backtick-param-fire.ps1` -- FIRE: backtick line-continued `-DumpFile` followed by `(if ...)` on the next line; the `(` and keyword are on the same line
+- `probe-R45-real-bug-fire.ps1` -- FIRE: the exact real-world motivating case -- `-DumpFile (if (...) { ... } else { ... })`; regression anchor for the defect origin
+- `probe-R45-subexpr-no-fire.ps1` -- NO FIRE: `$(if ...)` -- subexpression operator; `$` precedes `(`
+- `probe-R45-real-bug-fixed-no-fire.ps1` -- NO FIRE: `-DumpFile $(if (...) { ... } else { ... })` -- the canonical fix; regression anchor pins that the fix does NOT fire R45
+- `probe-R45-array-subexpr-no-fire.ps1` -- NO FIRE: `@(if ...)` -- array subexpression operator
+- `probe-R45-normal-statement-no-fire.ps1` -- NO FIRE: `if ($x) { ... }`, `foreach ($i in ...) { ... }`, `while ($x) { ... }` -- normal statement forms; keyword before paren
+- `probe-R45-cmdlet-paren-no-fire.ps1` -- NO FIRE: `(Get-ChildItem .).Count` -- legitimate grouping of a command
+- `probe-R45-comment-no-fire.ps1` -- NO FIRE: `(if ...)` only in full-line `#` comment; stripped before matching
+- `probe-R45-variable-ifconfig-no-fire.ps1` -- NO FIRE: `($ifConfig.name)` -- variable reference whose name starts with `if`; lookbehind `(?<![$@\w])` would still pass on the `(` since nothing precedes it, but what follows is `$ifConfig` not the bare keyword `if`; the keyword pattern `\s*(if|...)` requires the keyword to appear without a `$` prefix
+- `probe-R45-string-literal-fp.ps1` -- FIRE (documented false positive): `(if ...)` inside a double-quoted string literal. `strippedContent` does not strip string content, consistent with R33/R34. The rule fires on the string. Authors should use full-line `#` comments for documentation of deprecated usage forms.
+
+**Substrate citations:**
+
+- about_Operators, Grouping operator `( )` and Subexpression operator `$( )` sections: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators -- "allows you to let output from a *command* participate in an expression" vs. "$( ) Returns the result of one or more statements."
+- about_If: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_if -- confirms `if` is a language statement, not a command.
+
+**Known limitations:**
+
+- **String-literal false positive:** `(if ...)` inside a string literal fires R45 because `strippedContent` does not strip string content. See `probe-R45-string-literal-fp.ps1`. Workaround: put deprecated-usage documentation in full-line `#` comments rather than string literals.
+- **Case-sensitivity:** The pattern is case-sensitive (`gm` flags). PowerShell keywords are case-insensitive, so `(IF ...)` or `(Foreach ...)` would not be caught. In practice, PS scripts consistently use lowercase keywords; uppercase keyword usage is extremely rare.
+- **Multi-line keyword on next line:** If the opening `(` is on one line and the keyword starts on the next line (with a physical newline between them, not a backtick continuation), the pattern does not span across lines (`gm` mode, no `s` flag). This is an accepted limitation; the inline form (`( if ...`) and the backtick-continuation form are the shapes that appear in practice.
 
 ---
 

@@ -234,5 +234,20 @@
     "pattern": "(?:_api/ProjectServer|_api/web)[^\"\\n]*(?:\\$select|\\$filter)[^\"\\n]*[A-Za-z]+\\.[A-Za-z]+/",
     "message": "OData v4 type-cast syntax ('Namespace.Type/' segment in $select or $filter) appears in a SharePoint or Project Server REST URL. SharePoint and Project Server REST use OData v2/v3 which does not support type-cast segments; using 'Namespace.Type/' in a $select or $filter on a /_api/ProjectServer/ or /_api/web/ URL produces a parse error at runtime. Type casts in this form are a Dataverse OData v4 pattern and must not be used against SharePoint/ProjectServer endpoints. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview",
     "enabled": true
+  },
+  {
+    "id": "R45",
+    "title": "Statement keyword inside grouping operator -- use subexpression operator $(...) instead",
+    "severity": "ERROR",
+    "type": "regex",
+    "pattern": "(?<![\\$@\\w])(\\()\\s*(if|foreach|for|while|switch|do|trap)\\b",
+    "description": "The grouping operator ( ) treats its content as a command or expression, not a statement list. PowerShell statement keywords (if, foreach, for, while, switch, do, trap) placed immediately inside ( ) are parsed as command names -- the runtime raises 'The term \"<kw>\" is not recognized as a name of a cmdlet, function, script file, or executable program.' The parser does NOT catch this at parse time: [System.Management.Automation.Language.Parser]::ParseInput returns 0 errors, so AST-based parse checks are blind to this class of defect. The fix is the subexpression operator $( ) which is explicitly designed to hold one or more statements and return their output. Per about_Operators: grouping operator ( ) 'allows you to let output from a command participate in an expression'; subexpression operator $( ) 'returns the result of one or more statements'. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
+    "remediation": "Replace the outer ( ) with $( ): change -Param (if (...) { ... } else { ... }) to -Param $(if (...) { ... } else { ... }). The array subexpression @( ) is also valid. Do not change normal statement usage 'if ($x) { ... }' -- that has the keyword BEFORE the paren, not after.",
+    "references": [
+      "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
+      "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_if"
+    ],
+    "message": "Statement keyword inside grouping operator '(...)' is parsed as a command and fails at runtime with 'The term is not recognized as a cmdlet'. The grouping operator ( ) holds expressions and commands only. Per about_Operators, $( ) is the subexpression operator that 'returns the result of one or more statements'. Use the subexpression operator $(...) instead. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
+    "enabled": true
   }
 ]
