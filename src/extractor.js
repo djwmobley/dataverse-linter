@@ -287,6 +287,44 @@ function extract(filePath) {
     // NOT treated as an active guard (matching PS parser behavior). See
     // stripBlockComments() docstring for substrate citations and rationale.
     const rawContentNoBlockComments = stripBlockComments(content);
+    // v0.7.2: fourth content view. rawContent with BOTH `<# ... #>` block-comment
+    // ranges AND full-line `#` comments length-preservingly space-filled, while keeping
+    // string literals intact. Used by R45 (and any future rule that specifies
+    // content_view: "strippedNoBlockComments") so that neither comment type can
+    // produce false positives while the rule still fires on executable code.
+    //
+    // Why this composed view is necessary:
+    //   - strippedContent strips only line comments (^\s*#.*$); a block-comment body
+    //     containing "(if" / "(foreach" etc. (e.g. doc-comment prose) would still match
+    //     R45's pattern, producing a false positive.
+    //   - rawContentNoBlockComments strips only block comments; it retains line comments,
+    //     so "(if ..." in a line comment would fire -- regressing the suppression that
+    //     was already in place via strippedContent.
+    //   - Composing the two length-preserving transforms gives a view where both comment
+    //     types are blanked while string literals remain, matching exactly what R45 needs.
+    //
+    // COMPOSITION ORDER IS CRITICAL -- stripBlockComments MUST run on rawContent (not
+    // on strippedContent). Reason: stripComments (the line-comment stripper) uses the
+    // pattern `^\s*#.*$` which matches any line starting with `#` -- including the `#>`
+    // block-comment close token on its own line. If stripComments runs first (as when
+    // composing stripBlockComments(strippedContent)), the `#>` close is erased and
+    // stripBlockComments finds no matching close token, so the non-greedy
+    // `/<#[\s\S]*?#>/g` pattern never fires and the block body is NOT blanked.
+    // Running stripBlockComments first (on rawContent where `#>` is intact) correctly
+    // blanks the body; then stripComments on the result removes line-comment `#` lines
+    // that survived (including any `#>` or `<#` lines that were not part of a block pair).
+    //
+    // Length-preservation invariant: both stripComments and stripBlockComments replace
+    // matched characters with spaces (newlines preserved). Composing them keeps byte-offset
+    // alignment with rawContent, so match-index->line-number reporting in the validator
+    // remains correct.
+    //
+    // Substrate citation for block-comment bodies being inert executable content:
+    //   https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comments
+    //   "All text within the block is treated as part of the same comment" -- keywords
+    //   appearing inside <# ... #> are comment text, not executable statements, so R45
+    //   must not fire on them.
+    const strippedNoBlockComments = stripComments(stripBlockComments(content));
     // Compute function-body ranges against rawContent. stripComments now preserves
     // length (replaces matched chars with spaces so newlines and offsets align), so
     // ranges computed against rawContent are valid for matches whose index is
@@ -365,7 +403,7 @@ function extract(filePath) {
         }
     }
 
-    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, functionBodyRanges, filePath };
+    return { optionSets, payloads, parseErrors, rawContent: content, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, strippedNoBlockComments, functionBodyRanges, filePath };
 }
 
 module.exports = { extract, computeFunctionBodyRanges, isInsideAnyRange, stripBlockComments };

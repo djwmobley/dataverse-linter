@@ -248,6 +248,7 @@
       "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_if"
     ],
     "message": "Statement keyword inside grouping operator '(...)' is parsed as a command and fails at runtime with 'The term is not recognized as a cmdlet'. The grouping operator ( ) holds expressions and commands only. Per about_Operators, $( ) is the subexpression operator that 'returns the result of one or more statements'. Use the subexpression operator $(...) instead. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
+    "content_view": "strippedNoBlockComments",
     "enabled": true
   }
 ]

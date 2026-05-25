@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 function validate(extraction) {
-    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, functionBodyRanges, filePath } = extraction;
+    const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, strippedNoBlockComments, functionBodyRanges, filePath } = extraction;
     const errors = [...(parseErrors || [])];
 
     // Helper: returns true if `idx` lies strictly inside any [start, end) range.
@@ -48,8 +48,28 @@ function validate(extraction) {
         // regex-inverse rules must use the comment- and string-stripped derivation so
         // that bypass text hidden in comments or string literals cannot satisfy them.
         // regex rules (R24, R21) use normalized content; all other regex rules use strippedContent.
+        //
+        // v0.7.2: registry rules may declare a content_view field to override the
+        // content selection for that rule. The view map below lists every named view.
+        // If content_view names a view in the map, that view is used directly (before
+        // the type-based / id-based dispatch below). If content_view is absent or names
+        // a view not in the map, the existing dispatch applies unchanged.
+        //
+        // Note: normalizedContent is computed locally above. It is included in the map
+        // so that a future rule could declare content_view: "normalizedContent" and
+        // receive it without touching the dispatch code again.
+        const contentViewMap = {
+            strippedContent,
+            rawContent,
+            noCommentNoStringContent,
+            rawContentNoBlockComments,
+            strippedNoBlockComments,
+            normalizedContent,
+        };
         let targetContent;
-        if (rule.type === "regex-inverse") {
+        if (rule.content_view && Object.prototype.hasOwnProperty.call(contentViewMap, rule.content_view)) {
+            targetContent = contentViewMap[rule.content_view];
+        } else if (rule.type === "regex-inverse") {
             targetContent = noCommentNoStringContent;
         } else if (rule.id === "R24" || rule.id === "R21") {
             targetContent = normalizedContent;

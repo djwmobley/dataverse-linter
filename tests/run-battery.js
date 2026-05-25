@@ -1283,7 +1283,7 @@ const probes = [
     },
 
     // =========================================================================
-    // extractor C# attribute guard (v0.6.1)
+    // extractor C# attribute guard (v0.7.1)
     // A here-string body starting with [DllImport (or any C# attribute) must NOT
     // trigger extractor-json-error. The guard checks that the first non-whitespace
     // char after '[' is a JSON array element-start char; 'D' is not, so skipped.
@@ -1680,6 +1680,82 @@ const probes = [
         mustFire: ['R45'],
         mustNotFire: [],
         expectClean: false
+    },
+
+    // =========================================================================
+    // v0.7.2 R45 block-comment false-positive fix
+    // R45 now evaluates against strippedNoBlockComments (strippedContent with
+    // <# ... #> block-comment ranges additionally length-preservingly blanked).
+    // This eliminates a class of false positives where doc-comment prose
+    // containing "(if" / "(foreach" etc. caused R45 to fire on comment text.
+    //
+    // Fix rationale:
+    //   - strippedContent (the pre-fix view) strips only `^\s*#.*$` line comments.
+    //     Block-comment bodies survive into strippedContent, so "(if" in a <# #>
+    //     block fires R45 even though the text is never executed.
+    //   - rawContentNoBlockComments strips only block comments; it retains line
+    //     comments, so "(if ..." in a line comment would reintroduce that FP.
+    //   - strippedNoBlockComments = stripBlockComments(strippedContent) blanks both
+    //     comment types while keeping string literals intact (R45 intentionally
+    //     retains string literals -- the documented string-literal FP anchor probe
+    //     probe-R45-string-literal-fp.ps1 must still pass).
+    //   - Both transforms are length-preserving (space-fill, newlines kept), so
+    //     byte-offset alignment for match-index->line-number reporting is maintained.
+    //
+    // Substrate citation:
+    //   https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comments
+    //   "All text within the block is treated as part of the same comment" --
+    //   block-comment body text is never executable.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R45-block-comment-no-fire.ps1'),
+        label: 'probe-R45-block-comment-no-fire',
+        // TN (v0.7.2 FP-fix anchor): (if ...), (foreach ...), (while ...) in a
+        // <# ... #> block-comment body (including a .SYNOPSIS/.DESCRIPTION doc-comment).
+        // Block-comment bodies are inert comment text per about_Comments.
+        // v0.7.2 fix: R45 evaluates against strippedNoBlockComments so the block
+        // body is blanked before matching. R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-line-comment-no-fire-regression.ps1'),
+        label: 'probe-R45-line-comment-no-fire-regression',
+        // REGRESSION ANCHOR: (if ...), (foreach ...), (while ...) in full-line
+        // # comments. strippedNoBlockComments strips line comments (via the
+        // strippedContent base), so these must NOT fire -- same behavior as
+        // under v0.7.0/v0.7.1 using strippedContent.
+        // Pins that the v0.7.2 view change does not regress line-comment suppression.
+        // R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-real-code-fire-regression.ps1'),
+        label: 'probe-R45-real-code-fire-regression',
+        // REGRESSION ANCHOR: real executable (if (...) { ... } else { ... }) in code,
+        // not in any comment. The block-comment FP fix must NOT suppress detection of
+        // the actual antipattern. strippedNoBlockComments blanks comments but keeps
+        // executable code lines intact, so R45 still fires on the real antipattern.
+        // R45 MUST fire.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-mixed-block-comment-and-real-code.ps1'),
+        label: 'probe-R45-mixed-block-comment-and-real-code',
+        // MIXED PROBE: a block comment containing "(while ..." (must NOT fire) AND
+        // a separate real executable "(foreach (...) {...})" line (MUST fire).
+        // Net: R45 fires exactly once (on the real code line only).
+        // Validates that comment-blanking is range-bounded and does not bleed into
+        // adjacent executable code lines.
+        mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false,
+        exactFireCount: { 'R45': 1 }
     },
 
 ];
