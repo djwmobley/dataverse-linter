@@ -250,5 +250,15 @@
     "message": "Statement keyword inside grouping operator '(...)' is parsed as a command and fails at runtime with 'The term is not recognized as a cmdlet'. The grouping operator ( ) holds expressions and commands only. Per about_Operators, $( ) is the subexpression operator that 'returns the result of one or more statements'. Use the subexpression operator $(...) instead. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
     "content_view": "strippedNoBlockComments",
     "enabled": true
+  },
+  {
+    "id": "R46",
+    "title": "[Math]::(Floor|Ceiling|Round) double passed to -f with integer format specifier :D/:X",
+    "severity": "ERROR",
+    "type": "regex",
+    "content_view": "normalizedContent",
+    "pattern": "'[^'\\r\\n]*\\{\\d+:[DX]\\d*\\}[^'\\r\\n]*'\\s*-f\\s*(?:[^\\r\\n;]*?,\\s*)*(?<!\\[(?:int|long|int64)\\])\\[Math\\]::(?:Floor|Ceiling|Round)\\s*\\(",
+    "message": "[Math]::(Floor|Ceiling|Round) returns [double]; applying a :D or :X format specifier to a double throws 'Format specifier was invalid' at runtime. Cast before the -f operator: [int][Math]::Floor(...). .NET integer format specifiers (:D, :X) are valid only on integral types.",
+    "enabled": true
   }
 ]

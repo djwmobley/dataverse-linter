@@ -1758,6 +1758,94 @@ const probes = [
         exactFireCount: { 'R45': 1 }
     },
 
+    // =========================================================================
+    // R46 -- [Math]::(Floor|Ceiling|Round) double passed to -f with :D/:X specifier
+    //
+    // Origin: pwa-etl calendar Shift formatting -- '{0:D2}:{1:D2}' -f [Math]::Floor($m/60),...
+    // threw "Error formatting a string: Format specifier was invalid" on live client data.
+    // The script passed lint and parse-check; only runtime execution surfaced the bug.
+    //
+    // Citation: https://learn.microsoft.com/en-us/dotnet/standard/base-types/standard-numeric-format-strings
+    // "D" (Decimal) specifier: "Supported by: Integral types only" / "This format is
+    // supported only for integral types." Same for "X" (Hexadecimal). System.Double is
+    // in the floating-point set, so :D/:X on a [double] is invalid by definition.
+    // [Math]::Floor, [Math]::Ceiling, and [Math]::Round all return [double], not [int].
+    // Fix: cast before the -f operator: [int][Math]::Floor(...).
+    //
+    // Severity: ERROR (throws at runtime; data is lost; not a style issue).
+    // content_view: normalizedContent (string literals must be visible for :D/:X detection).
+    //
+    // Documented scope limitation: a division-produced double (e.g., ($n / 60)) is
+    // NOT caught by this rule -- the pattern anchors on the [Math]:: token.
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R46-basic-trigger.ps1'),
+        label: 'probe-R46-basic-trigger',
+        // TP 1: '{0:D2}:{1:D2}' -f [Math]::Floor($m / 60), ($m % 60)
+        // [Math]::Floor returns [double]; :D2 is integer-only. R46 MUST fire.
+        mustFire: ['R46'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R46-int-cast-clean.ps1'),
+        label: 'probe-R46-int-cast-clean',
+        // TN 1: same format string but [int][Math]::Floor(...) and [int]($m % 60).
+        // Explicit [int] cast makes the type correct for :D. R46 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R46'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R46-hex-trigger.ps1'),
+        label: 'probe-R46-hex-trigger',
+        // TP 2: '{0:X4}' -f [Math]::Floor($n) -- :X (Hexadecimal) is integer-only.
+        // [Math]::Floor returns [double]; throws at runtime. R46 MUST fire.
+        mustFire: ['R46'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R46-round-uncast-trigger.ps1'),
+        label: 'probe-R46-round-uncast-trigger',
+        // TP 3: '{0:D2}' -f [Math]::Round($n, 0) -- [Math]::Round also returns [double].
+        // :D is integer-only. R46 MUST fire.
+        mustFire: ['R46'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R46-n2-specifier-clean.ps1'),
+        label: 'probe-R46-n2-specifier-clean',
+        // TN 2: '{0:N2}' -f [Math]::Round($n, 2) -- :N (Numeric) is valid on all numeric
+        // types including [double]. No runtime error. R46 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R46'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R46-plain-int-clean.ps1'),
+        label: 'probe-R46-plain-int-clean',
+        // TN 3: '{0:D2}' -f $n -- plain variable, no [Math] call.
+        // R46 pattern requires the [Math]:: token; plain variable is out of scope.
+        // R46 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R46'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R46-division-double-limitation.ps1'),
+        label: 'probe-R46-division-double-limitation',
+        // DOCUMENTED LIMITATION ANCHOR: '{0:D2}' -f ($n / 60) -- division produces
+        // a [double] that is also invalid with :D at runtime, but the R46 regex does
+        // NOT fire here because there is no [Math]:: token. Known false negative for
+        // division-produced doubles; the fix is to cast: '{0:D2}' -f [int]($n / 60).
+        // R46 MUST NOT fire (out-of-scope by design).
+        mustFire: [],
+        mustNotFire: ['R46'],
+        expectClean: true
+    },
+
 ];
 
 // ---------------------------------------------------------------------------
