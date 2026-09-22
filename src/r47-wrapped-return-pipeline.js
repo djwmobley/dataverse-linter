@@ -280,7 +280,17 @@ const CONTROL_FLOW_BLOCK_KEYWORDS = /^(if|elseif|else|switch|foreach|for|while|d
 // (an assigned/passed/otherwise unintroduced scriptblock literal -- `$sb = { }`,
 // `ForEach-Object { }`, `Where-Object { }`, `& { }`, a nested `function`/`filter` body, etc.),
 // which remains an opaque nested scriptblock excluded from the enclosing function's shape.
-function precedingKeywordForBlock(tokens, openIdx) {
+// `transparentBraceSet` (used only by the R47-alias whole-file scan below; always undefined for
+// the original per-function shape computation, so that computation's behavior is byte-for-byte
+// unchanged) is a Set of token indexes -- each the OPEN '{' of a `function`/`filter`/
+// `${function:NAME}` definition body, as recorded by detectFunctionShapes -- that should be
+// treated as transparent (keyword-introduced) even though the '{' itself is not literally
+// preceded by the "function"/"filter" keyword token (a name, optional attributes, and optional
+// param(...) block sit in between). Returns the sentinel "function-body" (truthy, and distinct
+// from "switch" so `forceAllBlocksCount` is never mistakenly triggered for a function's own
+// direct-child blocks).
+function precedingKeywordForBlock(tokens, openIdx, transparentBraceSet) {
+  if (transparentBraceSet && transparentBraceSet.has(openIdx)) return "function-body";
   let k = openIdx - 1;
   while (k >= 0 && tokens[k].type === "NEWLINE") k--;
   if (k < 0) return null;
@@ -359,7 +369,7 @@ function precedingKeywordForBlock(tokens, openIdx) {
 // Statement boundaries (`;` or a real newline) are only recognized when paren/bracket depth is 0
 // at the CURRENT recursion level, so a multi-line array literal (`@( 'a'` / newline / `, 'b' )`)
 // never gets split mid-literal.
-function splitTopLevelStatements(tokens, start, end, forceAllBlocksCount) {
+function splitTopLevelStatements(tokens, start, end, forceAllBlocksCount, transparentBraceSet) {
   const statements = [];
   let current = [];
   let parenDepth = 0;
@@ -374,12 +384,14 @@ function splitTopLevelStatements(tokens, start, end, forceAllBlocksCount) {
   while (i < end) {
     const t = tokens[i];
     if (t.type === "{" || t.type === "ATBRACE") {
-      const keyword = t.type === "{" ? (forceAllBlocksCount ? "switch-case" : precedingKeywordForBlock(tokens, i)) : null;
+      const keyword = t.type === "{"
+        ? (forceAllBlocksCount ? "switch-case" : precedingKeywordForBlock(tokens, i, transparentBraceSet))
+        : null;
       if (keyword) {
         flush(); // whatever preceded the block (the keyword/condition tokens) carries no shape evidence of its own.
         const close = findMatchingCurly(tokens, i);
         const bodyEnd = close < 0 ? end : close;
-        const childStatements = splitTopLevelStatements(tokens, i + 1, bodyEnd, keyword === "switch");
+        const childStatements = splitTopLevelStatements(tokens, i + 1, bodyEnd, keyword === "switch", transparentBraceSet);
         statements.push(...childStatements);
         i = close < 0 ? end : close + 1;
         continue;
@@ -524,6 +536,12 @@ function stripScope(name) {
 function detectFunctionShapes(tokens) {
   const shapes = new Map();
   const definitionNameTokenIndexes = new Set();
+  // Every function/filter/${function:NAME} body's OPEN '{' token index -- consumed by the R47-alias
+  // whole-file statement scan (below) so that a body's contents are treated as a transparent,
+  // keyword-introduced block (same visibility as a top-level or control-flow-nested statement),
+  // never as an opaque assigned/passed scriptblock. Recorded even when the body's own close brace
+  // could not be resolved (shape "U"): the OPEN token's identity is independent of that.
+  const bodyOpenBraces = new Set();
 
   function mergeShape(name, shape) {
     const existing = shapes.get(name);
@@ -544,6 +562,7 @@ function detectFunctionShapes(tokens) {
       const name = stripScope(nameTok.text);
       const openBrace = findBodyOpenBrace(tokens, i + 2);
       if (openBrace < 0) { mergeShape(name, "U"); continue; }
+      bodyOpenBraces.add(openBrace);
       const closeBrace = findMatchingCurly(tokens, openBrace);
       if (closeBrace < 0) { mergeShape(name, "U"); continue; }
       mergeShape(name, computeBodyShape(tokens, openBrace + 1, closeBrace));
@@ -562,6 +581,7 @@ function detectFunctionShapes(tokens) {
       while (tokens[j] && tokens[j].type === "NEWLINE") j++;
       if (!tokens[j] || tokens[j].type !== "{") continue;
       const openBrace = j;
+      bodyOpenBraces.add(openBrace);
       const closeBrace = findMatchingCurly(tokens, openBrace);
       if (closeBrace < 0) { mergeShape(name, "U"); continue; }
       mergeShape(name, computeBodyShape(tokens, openBrace + 1, closeBrace));
@@ -569,7 +589,128 @@ function detectFunctionShapes(tokens) {
     }
   }
 
-  return { shapes, definitionNameTokenIndexes };
+  return { shapes, definitionNameTokenIndexes, bodyOpenBraces };
+}
+
+// ---------------------------------------------------------------------------
+// Step 1b: same-file alias resolution (`Set-Alias`/`New-Alias`/`Remove-Alias`) -- NAME takes
+// TARGET's return shape (W/P/U), resolved transitively through alias-to-alias chains up to depth
+// 4. Total classification: every alias definition maps to exactly one outcome below; there is no
+// enumerated allow-list of "shapes that get special-cased" -- anything this scan cannot statically
+// resolve (an unresolvable name/target, an undefined target, a chain exceeding depth 4, a cycle,
+// or a definition inside an opaque assigned/passed scriptblock) falls through to the SAME "X"
+// (undefined) branch every other unresolved NAME already falls through to elsewhere in this file --
+// never a distinct silent-pass branch of its own.
+// ---------------------------------------------------------------------------
+
+// Parses one alias-definition statement's arguments (statement[0] is the Set-Alias/New-Alias/
+// Remove-Alias WORD). Recognizes `-Name`/`-Value` by flag, and otherwise consumes bareword/VAR
+// tokens positionally (first positional = NAME, second = TARGET), matching PowerShell's own
+// parameter-binding order for these cmdlets. Any other named flag conservatively consumes one
+// following value token unless it is a known boolean switch or the statement ends, so e.g.
+// `-Scope Global gw Get-Wrapped` never misreads "Global" as the alias NAME. Quoted-string NAME/
+// TARGET values cannot be recovered here -- the tokenizer intentionally discards string contents
+// (see tokenize()) -- so a quoted form yields a null field, which the caller treats as
+// unresolvable (documented blind spot, never a crash and never a silent false-positive).
+const ALIAS_BOOLEAN_SWITCHES = new Set(["-force", "-passthru", "-whatif", "-confirm"]);
+function parseAliasArgs(statement) {
+  let name = null;
+  let target = null;
+  const positional = [];
+  let i = 1;
+  while (i < statement.length) {
+    const tok = statement[i];
+    if (tok.type === "WORD" && /^-name$/i.test(tok.text)) {
+      const val = statement[i + 1];
+      if (val && val.type === "WORD") name = val.text;
+      i += 2;
+      continue;
+    }
+    if (tok.type === "WORD" && /^-value$/i.test(tok.text)) {
+      const val = statement[i + 1];
+      if (val && val.type === "WORD") target = val.text;
+      i += 2;
+      continue;
+    }
+    if (tok.type === "WORD" && /^-/.test(tok.text)) {
+      const flag = tok.text.toLowerCase();
+      if (ALIAS_BOOLEAN_SWITCHES.has(flag)) { i += 1; continue; }
+      const next = statement[i + 1];
+      if (next && !(next.type === "WORD" && /^-/.test(next.text))) { i += 2; continue; }
+      i += 1;
+      continue;
+    }
+    if (tok.type === "WORD" || tok.type === "VAR") {
+      positional.push(tok.type === "WORD" ? tok.text : tok.name);
+    }
+    i += 1;
+  }
+  if (name === null && positional.length >= 1) name = positional[0];
+  if (target === null && positional.length >= 2) target = positional[1];
+  return { name, target };
+}
+
+// Walks the whole-file `visibleStatements` list (top-level, control-flow-nested, AND
+// function/filter-body-nested -- i.e. every "top-level or keyword-introduced block position"; an
+// alias defined inside an assigned/passed/anonymously-invoked scriptblock never appears in
+// `visibleStatements` at all, since that block was excluded as opaque by splitTopLevelStatements
+// the same way a nested scriptblock's `return` already is) and returns a Map of
+// lowercased-alias-name -> lowercased-target-name, reflecting the LAST definition in file order
+// (a later Set-Alias/New-Alias/Remove-Alias of the same NAME always overwrites an earlier one,
+// since the map is populated by a single forward pass). `Remove-Alias NAME` and a Set-Alias/
+// New-Alias whose TARGET could not be statically read both record `null` (unresolvable/no active
+// target as of that point in the file) rather than leaving a stale prior mapping in place.
+function detectAliasDefinitions(visibleStatements) {
+  const aliasMap = new Map();
+  for (const statement of visibleStatements) {
+    if (!statement.length || statement[0].type !== "WORD") continue;
+    const cmd = statement[0].text.toLowerCase();
+    if (cmd !== "set-alias" && cmd !== "new-alias" && cmd !== "remove-alias") continue;
+    const { name, target } = parseAliasArgs(statement);
+    if (!name) continue; // NAME itself could not be statically read -- no NAME to key the map on.
+    const nameLower = stripScope(name);
+    if (cmd === "remove-alias" || !target) {
+      aliasMap.set(nameLower, null);
+      continue;
+    }
+    aliasMap.set(nameLower, stripScope(target));
+  }
+  return aliasMap;
+}
+
+// Resolves one alias's ultimate return shape by walking `aliasMap` from `startName` toward a
+// function/filter NAME present in `functionShapes`, up to 4 alias-to-alias hops. Returns "X" for:
+// an undefined target, a `null` (removed/unresolvable) target, a cycle, or a chain exceeding depth
+// 4 -- the same "X" every other unresolved NAME in this file already resolves to, never a distinct
+// branch.
+function resolveAliasChain(startName, aliasMap, functionShapes) {
+  let current = startName;
+  const visited = new Set();
+  let hops = 0;
+  for (;;) {
+    if (functionShapes.has(current)) return functionShapes.get(current);
+    if (visited.has(current)) return "X"; // cyclic alias chain.
+    visited.add(current);
+    if (!aliasMap.has(current)) return "X"; // target is neither a known function nor a known alias.
+    if (hops >= 4) return "X"; // chain depth exceeded.
+    const next = aliasMap.get(current);
+    if (next === null) return "X"; // removed, or a later definition's target was unresolvable.
+    hops++;
+    current = next;
+  }
+}
+
+// Returns a Map of lowercased-alias-name -> "W"|"P"|"U" for every alias whose chain resolves to a
+// known function/filter shape. Aliases resolving to "X" are omitted entirely (an absent map entry
+// and an entry whose value is neither "U" nor "W" behave identically in scanCallSites, so omitting
+// them is a pure size optimization, not a behavioral shortcut).
+function resolveAliasShapes(aliasMap, functionShapes) {
+  const resolved = new Map();
+  for (const name of aliasMap.keys()) {
+    const shape = resolveAliasChain(name, aliasMap, functionShapes);
+    if (shape !== "X") resolved.set(name, shape);
+  }
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -747,9 +888,23 @@ function detectWrappedReturnPipelineFindings(rawContent) {
   const content = String(rawContent || "");
   if (!content) return [];
   const tokens = tokenize(content);
-  const { shapes, definitionNameTokenIndexes } = detectFunctionShapes(tokens);
-  if (shapes.size === 0) return [];
-  const hits = scanCallSites(tokens, shapes, definitionNameTokenIndexes);
+  const { shapes, definitionNameTokenIndexes, bodyOpenBraces } = detectFunctionShapes(tokens);
+
+  // Whole-file alias resolution (R47 alias extension): a flat, top-level-or-keyword-introduced
+  // (control-flow- AND function/filter-body-nested) statement list, excluding the same opaque
+  // assigned/passed scriptblocks the per-function shape computation already excludes. `end` is
+  // tokens.length - 1 to exclude the trailing EOF sentinel token, mirroring how a function body's
+  // own close-brace index is used as an exclusive end elsewhere in this file.
+  const visibleStatements = splitTopLevelStatements(tokens, 0, tokens.length - 1, false, bodyOpenBraces);
+  const aliasMap = detectAliasDefinitions(visibleStatements);
+  const aliasShapes = resolveAliasShapes(aliasMap, shapes);
+  const mergedShapes = new Map(shapes);
+  for (const [name, shape] of aliasShapes) {
+    if (!mergedShapes.has(name)) mergedShapes.set(name, shape); // a real function/filter NAME always wins over a same-named alias.
+  }
+
+  if (mergedShapes.size === 0) return [];
+  const hits = scanCallSites(tokens, mergedShapes, definitionNameTokenIndexes);
 
   return hits.map((hit) => {
     const line = lineForOffset(content, tokens[hit.index].start);
@@ -774,4 +929,6 @@ module.exports = {
   tokenize,
   detectFunctionShapes,
   scanCallSites,
+  detectAliasDefinitions,
+  resolveAliasShapes,
 };

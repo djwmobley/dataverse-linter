@@ -2161,6 +2161,82 @@ const probes = [
         expectClean: true
     },
 
+    // -------------------------------------------------------------------------
+    // R47 alias extension: a same-file `Set-Alias`/`New-Alias` NAME resolves to its TARGET's
+    // return shape (W/P/U), transitively through alias-to-alias chains up to depth 4. An alias
+    // defined inside an opaque assigned/passed scriptblock is excluded, consistent with the
+    // existing scriptblock exclusion; an alias whose target is undefined in the file is X (never
+    // flagged); an alias definition appearing after its own call site still resolves (whole-file
+    // scan, same as function definitions).
+    // -------------------------------------------------------------------------
+    {
+        file: path.join(__dirname, 'probe-R47-alias-flag-w-piped.ps1'),
+        label: 'probe-R47-alias-flag-w-piped',
+        // Alias to a W-shaped function, piped directly: flag.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-flag-name-value-w-piped.ps1'),
+        label: 'probe-R47-alias-flag-name-value-w-piped',
+        // `Set-Alias -Name NAME -Value TARGET` form, TARGET is W-shaped: flag.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-flag-new-alias-foreach.ps1'),
+        label: 'probe-R47-alias-flag-new-alias-foreach',
+        // `New-Alias` defined inside a top-level `foreach` (keyword-introduced block position),
+        // target is W-shaped: flag.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-noflag-p-piped.ps1'),
+        label: 'probe-R47-alias-noflag-p-piped',
+        // Alias to a P-shaped (plain) function, piped: no flag.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-noflag-undefined-target.ps1'),
+        label: 'probe-R47-alias-noflag-undefined-target',
+        // Alias whose target has no definition in the file (shape X): no flag.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-flag-chain-depth2-w.ps1'),
+        label: 'probe-R47-alias-flag-chain-depth2-w',
+        // Alias-to-alias chain, depth 2, resolving to a W-shaped function: flag.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-noflag-scriptblock-scope.ps1'),
+        label: 'probe-R47-alias-noflag-scriptblock-scope',
+        // Alias defined inside an anonymously-invoked `& { }` scriptblock: excluded (opaque),
+        // never resolves, so the later use is shape X: no flag.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-alias-flag-defined-after-call-site.ps1'),
+        label: 'probe-R47-alias-flag-defined-after-call-site',
+        // Alias definition appears AFTER its own call site in the file: still resolves
+        // (whole-file scan, same as function definitions), so the call is flagged.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+
 ];
 
 // ---------------------------------------------------------------------------
