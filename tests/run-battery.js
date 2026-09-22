@@ -1846,6 +1846,321 @@ const probes = [
         expectClean: true
     },
 
+    // =========================================================================
+    // R47 -- unary-comma-wrapped function/filter return used directly as a pipeline
+    // source (`return ,$x` sends its array as one $_; a downstream pipeline stage or
+    // foreach then silently operates on the whole array instead of each item).
+    // Implementation: src/r47-wrapped-return-pipeline.js (built-in structural rule,
+    // wired directly into validate() -- see that file's header for why this is not a
+    // rules/registry.json regex entry).
+    // =========================================================================
+    {
+        file: path.join(__dirname, 'probe-R47-w1-return-comma.ps1'),
+        label: 'probe-R47-w1-return-comma',
+        // Return-shape row: `return ,expr` (space after comma allowed).
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-w2-return-paren-comma.ps1'),
+        label: 'probe-R47-w2-return-paren-comma',
+        // Return-shape row: `return (,expr)`.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-w3-return-atparen-comma.ps1'),
+        label: 'probe-R47-w3-return-atparen-comma',
+        // Return-shape row: `return @(,expr)`.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-w4-filter-toplevel-comma.ps1'),
+        label: 'probe-R47-w4-filter-toplevel-comma',
+        // Return-shape row: a top-level statement beginning with a unary comma. Also covers a `filter NAME { ... }` definition.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-w5-writeoutput-noenumerate-before.ps1'),
+        label: 'probe-R47-w5-writeoutput-noenumerate-before',
+        // Return-shape row: `Write-Output -NoEnumerate X`.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-w6-writeoutput-noenumerate-after.ps1'),
+        label: 'probe-R47-w6-writeoutput-noenumerate-after',
+        // Return-shape row: `Write-Output X -NoEnumerate` (flag after the value).
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-w7-return-var-last-assign-comma.ps1'),
+        label: 'probe-R47-w7-return-var-last-assign-comma',
+        // Return-shape row: `return $v` where the last assignment to $v is a leading unary comma expression.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-carveout-scalar-numeric.ps1'),
+        label: 'probe-R47-carveout-scalar-numeric',
+        // Carve-out: unary comma whose operand is a bare NUMERIC literal is a runtime no-op scalar wrap -- treated as P, not W.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-carveout-scalar-string.ps1'),
+        label: 'probe-R47-carveout-scalar-string',
+        // Carve-out: unary comma whose operand is a bare STRING literal -- treated as P, not W.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-mixed-w-and-p.ps1'),
+        label: 'probe-R47-mixed-w-and-p',
+        // Mixed W and P exit paths in one function: W (any W-shaped return path makes the whole function W).
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-plain-p-shape-no-flag.ps1'),
+        label: 'probe-R47-plain-p-shape-no-flag',
+        // Shape P: every other return (a plain, unwrapped return value). Any call site is never flagged.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-x-shape-undefined-no-flag.ps1'),
+        label: 'probe-R47-x-shape-undefined-no-flag',
+        // Shape X: NAME has no definition in this file (a custom-looking, undefined command name). Never flagged.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-flag-pipe-any-stage.ps1'),
+        label: 'probe-R47-flag-pipe-any-stage',
+        // Call-site row: `F | <any stage>` -- the general pipe rule.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-flag-atparen-wrap-pipe.ps1'),
+        label: 'probe-R47-flag-atparen-wrap-pipe',
+        // Call-site row: `@(F) | ...`.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-flag-assign-atparen-then-pipe.ps1'),
+        label: 'probe-R47-flag-assign-atparen-then-pipe',
+        // Call-site row: `$r = @(F); $r | ...`.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-flag-foreach-in.ps1'),
+        label: 'probe-R47-flag-foreach-in',
+        // Call-site row: `foreach ($i in F) { }` -- the loop body empirically runs once with the whole array.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-flag-unparseable-return-shape.ps1'),
+        label: 'probe-R47-flag-unparseable-return-shape',
+        // Call-site row: the function body's return shape cannot be parsed at all (here, an unclosed function body) -- unparseable defaults to flag, never a silent pass.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-foreach-object-literal-unwrap.ps1'),
+        label: 'probe-R47-noflag-foreach-object-literal-unwrap',
+        // Call-site row: `F | ForEach-Object { $_ }` as the first stage -- literal unwrap.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-out-null.ps1'),
+        label: 'probe-R47-noflag-out-null',
+        // Call-site row: `F | Out-Null`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-null-assign.ps1'),
+        label: 'probe-R47-noflag-null-assign',
+        // Call-site row: `$null = F`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-plain-assign-then-pipe.ps1'),
+        label: 'probe-R47-noflag-plain-assign-then-pipe',
+        // Call-site row: `$r = F; $r | ...` -- plain assignment unwraps.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-paren-wrap-pipe.ps1'),
+        label: 'probe-R47-noflag-paren-wrap-pipe',
+        // Call-site row: `(F) | ...`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-dollarparen-wrap-pipe.ps1'),
+        label: 'probe-R47-noflag-dollarparen-wrap-pipe',
+        // Call-site row: `$(F) | ...`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-paren-where.ps1'),
+        label: 'probe-R47-noflag-paren-where',
+        // Call-site row: `(F).Where{}`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-paren-foreach-method.ps1'),
+        label: 'probe-R47-noflag-paren-foreach-method',
+        // Call-site row: `(F).ForEach{}`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-noflag-atparen-index.ps1'),
+        label: 'probe-R47-noflag-atparen-index',
+        // Call-site row: `@(F)[0]`.
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-adversary-binary-comma-assign.ps1'),
+        label: 'probe-R47-adversary-binary-comma-assign',
+        // Adversary case: binary/list comma assign `$x = 1,2,3; return $x` -- P, not W (no flag).
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-adversary-multiline-atparen-continuation.ps1'),
+        label: 'probe-R47-adversary-multiline-atparen-continuation',
+        // Adversary case: multi-line `@( 'a'` / newline / `, 'b' )` array-literal continuation must NOT be read as a top-level unary-comma statement (no flag).
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-adversary-nested-scriptblock.ps1'),
+        label: 'probe-R47-adversary-nested-scriptblock',
+        // Adversary case: nested scriptblock `$sb = { return ,$x }; & $sb; return $y` -- the scriptblock's own `return` must not leak into the enclosing function's shape (no flag).
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-adversary-dynamic-function-table-piped.ps1'),
+        label: 'probe-R47-adversary-dynamic-function-table-piped',
+        // Adversary case: ${function:F} = { return ,$x } piped -- flag.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-adversary-empty-return-comma-atparen-piped.ps1'),
+        label: 'probe-R47-adversary-empty-return-comma-atparen-piped',
+        // Adversary case: empty `return ,@()` piped -- flag (the operand @() is not a bare scalar literal, so the carve-out does not apply).
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-adversary-undefined-command-no-fire.ps1'),
+        label: 'probe-R47-adversary-undefined-command-no-fire',
+        // Adversary case: call to an undefined command `Get-ChildItem | Where-Object` -- no flag (Get-ChildItem is a real cmdlet with no in-file definition; shape X).
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+
+    // -------------------------------------------------------------------------
+    // R47 control-flow-block fix: a `{ }` block introduced by a control-flow keyword
+    // (if/elseif/else/switch/foreach/for/while/do/try/catch/finally/begin/process/end) is part
+    // of the enclosing function's OWN body, not an opaque nested scriptblock -- its return/
+    // comma/Write-Output/assignment statements count toward the enclosing function's shape.
+    // Only a block that is assigned, passed as an argument, or otherwise not keyword-introduced
+    // remains excluded.
+    // -------------------------------------------------------------------------
+    {
+        file: path.join(__dirname, 'probe-R47-cf-return-inside-if.ps1'),
+        label: 'probe-R47-cf-return-inside-if',
+        // A `return ,$x` inside an `if` block counts toward the enclosing function's shape.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-cf-return-inside-try.ps1'),
+        label: 'probe-R47-cf-return-inside-try',
+        // A `return ,$x` inside a `try` block counts toward the enclosing function's shape.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-cf-foreach-inside-if.ps1'),
+        label: 'probe-R47-cf-foreach-inside-if',
+        // Nested control-flow blocks: `if (...) { foreach (...) { return ,$x } }` is W.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-cf-process-block-advanced-function.ps1'),
+        label: 'probe-R47-cf-process-block-advanced-function',
+        // `process { }` of an advanced function is part of the function's own body.
+        mustFire: ['R47'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R47-cf-where-object-scriptblock-not-counted.ps1'),
+        label: 'probe-R47-cf-where-object-scriptblock-not-counted',
+        // Regression anchor: a scriptblock ARGUMENT (Where-Object { }) is not keyword-introduced and
+        // stays excluded, even though it contains `return ,$x`; F's own return is plain (P).
+        mustFire: [],
+        mustNotFire: ['R47'],
+        expectClean: true
+    },
+
 ];
 
 // ---------------------------------------------------------------------------

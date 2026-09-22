@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { detectWrappedReturnPipelineFindings } = require("./r47-wrapped-return-pipeline");
 
 function validate(extraction) {
     const { optionSets, payloads, parseErrors, rawContent, strippedContent, noCommentNoStringContent, rawContentNoBlockComments, strippedNoBlockComments, functionBodyRanges, filePath } = extraction;
@@ -241,6 +242,13 @@ function validate(extraction) {
             }
         }
     });
+
+    // R47 (built-in structural rule, like odata-bind-guid/optionset-coverage/system-entity-cascade/
+    // schema-entity-not-found above): a function/filter whose return unary-comma-wraps its result
+    // sends its array as a single pipeline object. See src/r47-wrapped-return-pipeline.js for the
+    // full detection writeup; this is a dedicated scanner, not a registry.json regex rule, because
+    // validator.js's registry dispatch has no "code"-backed rule type to bind to.
+    errors.push(...detectWrappedReturnPipelineFindings(rawContent));
 
     payloads.forEach((payload, index) => {
         function traverse(obj) {

@@ -159,6 +159,7 @@ The linter applies two categories of rules: **dynamic rules** loaded from `rules
 | R43 | regex | ERROR | `Register-PnPManagementShellAccess` is a removed cmdlet (P4). The shared PnP Management Shell Entra app it consented was retired (2024-09-09); the cmdlet produces `CommandNotFoundException` at runtime. Replacement: `Register-PnPEntraIDAppForInteractiveLogin` or `Register-PnPEntraIDApp`. See: https://pnp.github.io/powershell/articles/registerapplication.html |
 | R44 | regex | ERROR | OData v4 type-cast syntax (`Namespace.Type/` segment in `$select`/`$filter`) on a SharePoint or Project Server REST URL (P8). OData v2/v3 does not parse type-cast segments; using one on `/_api/ProjectServer/` or `/_api/web/` produces a runtime parse error. Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/overview |
 | R45 | regex | ERROR | Statement keyword (`if`, `foreach`, `for`, `while`, `switch`, `do`, `trap`) inside the grouping operator `(...)`. Per `about_Operators`: the grouping operator `( )` "allows you to let output from a *command* participate in an expression" -- it expects commands/expressions, not statements. A statement keyword inside `( )` is parsed as a command name at runtime and produces "The term 'if' is not recognized as a name of a cmdlet." This class is **invisible to `[Parser]::ParseInput`** (returns 0 errors). The subexpression operator `$( )` is designed for this: it "returns the result of one or more statements." Fix: replace `(if ...)` with `$(if ...)`. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators |
+| R47 | built-in | ERROR | A `function`/`filter`/`${function:NAME}` definition whose `return` unary-comma-wraps its result (`return ,$x`, `return (,$x)`, `return @(,$x)`, `Write-Output -NoEnumerate`, or `return $v` whose last assignment was `$v = ,expr`) sends its entire array as ONE pipeline object. Piping the call directly (`F \| ...`), assigning it through `@( )` before piping (`$r = @(F); $r \| ...`), or using it as a `foreach ($i in F)` source then silently processes the whole array once instead of once per item. See "R47" under Failure modes below for the full return-shape/call-site classification and its known false-positive. |
 | odata-bind-guid | built-in | ERROR | `@odata.bind` value uses an alternate key (`Name='X'`) instead of a GUID; alternate-key binds are not supported by the Web API. |
 | optionset-coverage | built-in | ERROR | A global option set name referenced in a payload is missing from the script's `$optionSets` bootstrap array. |
 | system-entity-cascade | built-in | ERROR | Relationship payload targets a system entity (e.g., `systemuser`, `account`) with `Assign` set to a value other than `NoCascade`; cascade on system entities causes data integrity risks. |
@@ -672,6 +673,126 @@ The fix uses the `content_view: "strippedNoBlockComments"` field in the registry
 
 ---
 
+### R47 -- Unary-comma-wrapped function/filter return used directly as a pipeline source
+
+A `function`, `filter`, or `${function:NAME} = { ... }` definition that returns its result wrapped
+in a **unary comma** (`return ,$x`) sends its ENTIRE array down the pipeline as a SINGLE object.
+PowerShell's own parser and PSScriptAnalyzer accept this syntax without complaint -- it is a
+runtime *semantic* defect about how many objects flow through the pipeline, not a syntax error, so
+neither tool can see it. A caller that pipes the call directly (`F | Sort-Object`), wraps it in
+`@( )` before piping, or iterates it with `foreach ($i in F)` silently operates on the whole array
+ONCE instead of once per item.
+
+**Implementation note:** unlike every other rule in this table, R47 is not a `rules/registry.json`
+entry. This clone's legacy rule-registry dispatch (`src/validator.js` / `src/rule-manager.js`)
+only understands the `regex`, `regex-template`, and `regex-inverse` rule types -- there is no
+"code"-backed rule type to declare a structural, multi-statement scanner against. R47's shape
+analysis (classifying a function's return statements, excluding nested scriptblocks from the
+enclosing function's shape, resolving the last assignment to a variable before a bare `return $v`)
+cannot be expressed as a single regex over any of the existing blanked content views. Like the four
+pre-existing `built-in` rows in this table (`odata-bind-guid`, `optionset-coverage`,
+`system-entity-cascade`, `schema-entity-not-found` -- none of which are `registry.json` entries
+either), R47 is a dedicated hand-written scanner (`src/r47-wrapped-return-pipeline.js`) wired
+directly into `validate()`.
+
+**Return-shape classification** (per named function/filter; a name defined more than once is `W` if
+ANY of its definitions is `W`):
+
+- **W (wrapped)** -- any of:
+  - `return ,expr` / `return (,expr)` / `return @(,expr)` (a space after the comma is allowed).
+  - A TOP-LEVEL statement of the function body that begins with a unary comma (the comma is the
+    first token of the statement, and the statement is not inside an unclosed `@(`/`(`/`[`
+    construct -- this excludes a multi-line array-literal continuation line like `, 'b'` inside
+    `@( ... )`).
+  - `Write-Output -NoEnumerate X` or `Write-Output X -NoEnumerate` (either argument order).
+  - `return $v` where the LAST assignment to `$v` in the function body is a leading unary-comma
+    expression `$v = ,expr`. A binary/list comma (`$v = $a,$b`, `$v = 1,2,3`) is `P`, not `W`.
+  - Mixed `W` and `P` exit paths in one function: `W` (any wrapped path taints the whole function).
+  - **Carve-out:** a unary comma whose operand is a bare numeric or string literal (`,5`, `,'a'`)
+    is `P` -- wrapping a scalar in a 1-element array is a runtime no-op for this failure mode.
+- **P (plain)** -- every other return.
+- **X** -- `NAME` has no definition anywhere in the file (e.g. a real cmdlet, or a typo).
+
+**Scriptblock boundary:** a `{ ... }` block introduced by a control-flow keyword -- `if` / `elseif`
+/ `else` / `switch` (including its own case/`default` action blocks) / `foreach` / `for` / `while`
+/ `do` / `try` / `catch` / `finally` / `begin` / `process` / `end` -- is part of the ENCLOSING
+function's own body: a `return`, top-level leading-unary-comma statement, `Write-Output
+-NoEnumerate`, or `$v = ,expr` assignment inside one of these counts toward the enclosing
+function's shape exactly as if it appeared unnested, and this holds through arbitrary nesting of
+such blocks (`if (...) { foreach (...) { return ,$x } }` is `W`). A block that is NOT
+keyword-introduced -- assigned to a variable (`$sb = { return ,$x }`), passed as an argument
+(`ForEach-Object { }`, `Where-Object { }`), or invoked directly (`& { }`) -- remains opaque to the
+enclosing function's return-shape evidence; a `return` inside one of those belongs to a different
+scope (the scriptblock's own) and never taints the enclosing function's shape. This still is not
+full PowerShell scoping semantics -- see Known limitations below for what it does not model.
+
+**Call-site classification** (`F` is a call to `NAME`; `F`, `F -Args`, `& F`, `. F`, and a pipe
+continuation across a line break all count):
+
+- **FLAG when `NAME` is `W`:** `F | <any stage>`; `@(F) | ...`; `$r = @(F); $r | ...`;
+  `foreach ($i in F) { }`.
+- **NO FLAG regardless of shape:** `F | ForEach-Object { $_ }` as the literal first stage;
+  `F | Out-Null`; `$null = F`; `$r = F; $r | ...` (plain assignment unwraps); `(F) | ...`;
+  `$(F) | ...`; `(F).Where{}` / `(F).ForEach{}`; `@(F)[0]`; any call site when `NAME`'s shape is
+  `P` or `X`.
+- **FLAG when the function body's return shape cannot be parsed at all** (e.g. an unclosed/
+  unbalanced function body) -- unparseable defaults to flag, never a silent pass.
+
+**Accepted, documented false positive:** a function that intentionally returns one batched array
+as an API contract (e.g. a `Get-AllItems` helper meant to be consumed as a single array) is
+syntactically indistinguishable from this defect -- R47 cannot see caller intent. This linter has
+no per-finding suppression-annotation mechanism (see `src/packs/powershell.js`'s
+`detectNativeSuppressionDirectives` in the newer WP1 engine, which explicitly REJECTS native
+PSScriptAnalyzer suppression comments as unvalidated rather than honoring them -- the legacy engine
+this rule lives in has no analogous mechanism of its own, honored or not). To signal intent,
+wrap the call in parentheses (`(F) | ...`); R47 always treats an exactly-parenthesized call as an
+explicit unwrap and never flags it, regardless of the callee's shape.
+
+**Known limitations:**
+
+- **Keyword-vs-argument disambiguation is token-based, not a real AST.** The scanner decides
+  whether a `{ }` is control-flow-introduced by looking at the token immediately before it (a
+  keyword, or a `)`/`]` that itself resolves back to one via paren/bracket matching). This is
+  reliable for ordinary PowerShell formatting but can be fooled by unusual constructs that place a
+  control-flow keyword token immediately before an unrelated `{ }` in a way this scanner does not
+  model (e.g. a keyword used as a bare string/parameter value directly adjacent to a scriptblock
+  argument with no comma or operator between them) -- an extreme edge case, not exercised by any
+  probe.
+- **Position-only, no real scoping.** Like R25/R31 elsewhere in this file, the scanner tracks
+  assignments and definitions by TEXTUAL POSITION in the file, not lexical/dynamic scope. A
+  same-named `$v` reused across unrelated functions, or reassigned inside a loop that runs zero
+  times, is not modeled precisely.
+- **Cross-file definitions are invisible.** R47 only sees `function`/`filter`/`${function:NAME}`
+  definitions in the SAME file being linted. A call to a function defined in a dot-sourced or
+  imported module file is always shape `X` (never flagged), even if that function's real return
+  shape is `W`. **Concrete false negative:** a script that does `. .\Helpers.ps1` and then pipes a
+  call to a `Get-Widgets` function defined in `Helpers.ps1` (and shaped `W` there) is never flagged
+  by this rule, no matter how it is piped.
+- **Dynamic/indirect invocation is invisible.** `& (Get-Command 'F')`, `Invoke-Expression 'F'`, and
+  invocation through a variable holding the function's name as a string (`& $fnName`) are not
+  recognized as calls to `F` at all.
+- **Command-name vs. argument-value ambiguity.** The call-site scanner identifies "command
+  position" heuristically (the previous token is a statement/pipe/call-operator boundary, or the
+  keyword `in`). A function name that also appears as a bare argument VALUE to some other command
+  in a position that happens to satisfy this heuristic (rare in practice) could be misread as a
+  call.
+- **Not every pipeline shape in the spec's NO-FLAG list is exhaustively re-verified against every
+  possible caller variation** (e.g. `(F).Where{}` and `(F).ForEach{}` are checked as one shape --
+  anything following an exactly-wrapped `(F)` is NO FLAG, matching the spec's stated intent that
+  plain grouping always unwraps -- rather than independently re-deriving the `.Where`/`.ForEach`
+  method names). A `(F).SomeOtherMethod()` is therefore also NO FLAG, which is consistent with
+  "plain grouping unwraps" but was not independently spelled out in the original classification
+  table.
+
+**Concrete example that passes R47 but should not be trusted as fully checked:** a script that
+defines `function Get-Rows { return ,$rows }` in `Shared.ps1`, dot-sources it
+(`. .\Shared.ps1`), and then writes `Get-Rows | ForEach-Object { Process-Row $_ }` in the caller
+script. R47 sees `Get-Rows` as shape `X` (no definition in the file it is linting) and never
+flags the call, even though the real defect -- the whole `$rows` array processed once as `$_` --
+is present. This is the cross-file blind spot named above, made concrete.
+
+---
+
 ### module-env-mismatch — module imported without required runtime directive
 
 Some PowerShell modules are incompatible with PowerShell Core (pwsh 7 / .NET). When imported under the wrong runtime, these modules fail silently — the module appears to load but cmdlets are missing or the process exits without a diagnostic error. The `#Requires -PSEdition Desktop` directive is the only mechanism that fails fast (at parse time, before any code runs) when the script is launched under the wrong runtime.
@@ -960,7 +1081,7 @@ node src/update-schema.js --mock path/to/metadata.xml
 
 - **Pass battery** (`battery-pass.ps1`) — a clean script expected to produce no violations; linter must exit 0.
 - **Fail battery** (`battery-fail.ps1`) — a script with known violation types; linter must catch every one and must not fire any unexpected rule IDs.
-- **141 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.4.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.4.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the v0.4.1 block-comment guard fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the v0.4.2 module-env-mismatch block-comment fix; the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern; the v0.5.2 extractor here-string JSON-shape guard probes (prose-no-fire / empty-no-fire / valid-json-regression / json-with-interpolation / malformed-json / interpolation-herestring) that pin the false-positive fix and confirm JSON-shaped-but-broken bodies still error; the v0.7.0 R45 statement-keyword-in-grouping-operator probes (6 TP: if-grouping-fire / foreach-grouping-fire / switch-grouping-fire / while-grouping-fire / backtick-param-fire / real-bug-fire; 7 TN: subexpr-no-fire / real-bug-fixed-no-fire / array-subexpr-no-fire / normal-statement-no-fire / cmdlet-paren-no-fire / comment-no-fire / variable-ifconfig-no-fire; 1 documented-FP anchor: string-literal-fp) that pin the grouping-vs-subexpression detection surface; the v0.7.1 extractor C# attribute guard probes (cs-attribute-no-fire / json-array-still-parsed) that pin the C# `[DllImport...]` false-positive fix and its regression anchor; and the v0.7.2 R45 block-comment false-positive fix probes (block-comment-no-fire -- FP-fix anchor confirming `<# ... #>` body prose does not fire; line-comment-no-fire-regression -- regression anchor confirming line-comment suppression survives the view switch; real-code-fire-regression -- regression anchor confirming real executable `(if ...)` still fires; mixed-block-comment-and-real-code -- mixed probe confirming the block comment instance is suppressed while the adjacent real-code instance fires exactly once) that pin the `strippedNoBlockComments` content-view change for R45.
+- **185 adversarial probes** (see `tests/run-battery.js` for the authoritative count and registry) — targeted single-concern fixtures, each declaring which rules must fire, which must not fire, and in some cases exact fire counts. This includes the R47 probe set (37 probes: one per return-shape classification row, one per call-site classification row, the numeric/string scalar carve-out, every adversary case named in R47's design brief -- binary/list-comma assignment, multi-line `@( )` array-literal continuation, a nested anonymous scriptblock's `return` not leaking into the enclosing function's shape, `${function:NAME}` dynamic assignment, an empty `,@()` operand, an unparseable/unclosed function body, and a call to a real but undefined-in-file command -- plus the control-flow-block fix set: a wrapped return inside `if`, inside `try`, inside `foreach` nested inside `if`, inside an advanced function's `process { }` block, and the regression anchor confirming a `Where-Object { }` argument scriptblock stays excluded). Probes cover: comment-bypass shapes for regex-inverse rules; single-quote here-string parsing; unparseable payloads with variable interpolation; backtick line-continuation handling for R24; semicolon- and pipe-terminated `pac solution import` calls; R25 with both default and non-default variable sets; `system-entity-cascade` on a system entity; non-ASCII chars inside double-quoted strings (R29); non-ASCII chars inside `#` comments (R29 safe-path); known-bad cmdlet+param combination (R31); module import without required directive (`module-env-mismatch`); module import with required directive present (clean path); the full R32–R36 trigger/clean/edge-case/false-positive/false-negative probe sets; the v0.4.1 R12 conjunction-aware probes (with-guard / no-guard / desktop-guard / cmdlet-in-string / no-cmdlet-no-guard); the v0.4.1 R25 scope-aware probes (script-scope / function-local / watch-name-prefixed / non-watch-name); the R25 anonymous-scriptblock limitation anchor that pins the documented scope-tracker gap; the v0.4.1 R12 block-comment-guard probes (block-comment-requires / block-comment-requires-line-form / line-comment-requires-still-works / mixed-block-and-line) that pin the v0.4.1 block-comment guard fix and its regression anchors; the v0.4.2 R28 conjunction-aware probes (no-mutation-no-guard / post-no-guard / post-with-guard / get-only-no-guard / patch-no-guard / put-no-guard / delete-no-guard / mixedcase-method-no-fire) that pin the `requires_present` precondition, PUT coverage, DELETE intentional-exclusion, and case-sensitivity boundary; the v0.4.2 module-env-mismatch block-comment guard probes (block-comment-requires / line-comment-still-works) that pin the v0.4.2 module-env-mismatch block-comment fix; the R38 manual-WhatIf probes (no-cmdletbinding / function-no-cmdletbinding / param-decorator-no-suppress / canonical-supportsshould / no-whatif-param / cmdletbinding-no-supportsshould / bool-whatif-no-fire / supportsshould-false / supportsshould-bare) that cover the full detection envelope including the bare-name shorthand and the explicit-false antipattern; the v0.5.2 extractor here-string JSON-shape guard probes (prose-no-fire / empty-no-fire / valid-json-regression / json-with-interpolation / malformed-json / interpolation-herestring) that pin the false-positive fix and confirm JSON-shaped-but-broken bodies still error; the v0.7.0 R45 statement-keyword-in-grouping-operator probes (6 TP: if-grouping-fire / foreach-grouping-fire / switch-grouping-fire / while-grouping-fire / backtick-param-fire / real-bug-fire; 7 TN: subexpr-no-fire / real-bug-fixed-no-fire / array-subexpr-no-fire / normal-statement-no-fire / cmdlet-paren-no-fire / comment-no-fire / variable-ifconfig-no-fire; 1 documented-FP anchor: string-literal-fp) that pin the grouping-vs-subexpression detection surface; the v0.7.1 extractor C# attribute guard probes (cs-attribute-no-fire / json-array-still-parsed) that pin the C# `[DllImport...]` false-positive fix and its regression anchor; and the v0.7.2 R45 block-comment false-positive fix probes (block-comment-no-fire -- FP-fix anchor confirming `<# ... #>` body prose does not fire; line-comment-no-fire-regression -- regression anchor confirming line-comment suppression survives the view switch; real-code-fire-regression -- regression anchor confirming real executable `(if ...)` still fires; mixed-block-comment-and-real-code -- mixed probe confirming the block comment instance is suppressed while the adjacent real-code instance fires exactly once) that pin the `strippedNoBlockComments` content-view change for R45.
 - **1 unit test** (`test-r25-template.js`) — directly tests the `regex-template` substitution mechanism in `src/validator.js` without going through the full linter pipeline.
 
 The probe set is the regression-test surface. When adding a new rule, ship a corresponding probe that asserts the rule fires on a minimal triggering fixture and does not fire on a clean one. Document any known false-positive or false-negative behavior in the run-battery.js entry comment.
