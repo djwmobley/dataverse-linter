@@ -768,12 +768,10 @@ applies to the alias exactly as it would to the underlying function name.
 **Accepted, documented false positive:** a function that intentionally returns one batched array
 as an API contract (e.g. a `Get-AllItems` helper meant to be consumed as a single array) is
 syntactically indistinguishable from this defect -- R47 cannot see caller intent. This linter has
-no per-finding suppression-annotation mechanism (see `src/packs/powershell.js`'s
-`detectNativeSuppressionDirectives` in the newer WP1 engine, which explicitly REJECTS native
-PSScriptAnalyzer suppression comments as unvalidated rather than honoring them -- the legacy engine
-this rule lives in has no analogous mechanism of its own, honored or not). To signal intent,
-wrap the call in parentheses (`(F) | ...`); R47 always treats an exactly-parenthesized call as an
-explicit unwrap and never flags it, regardless of the callee's shape.
+no per-finding suppression-annotation mechanism, and native PSScriptAnalyzer suppression comments
+are not honored. To signal intent, wrap the call in parentheses (`(F) | ...`); R47 always treats
+an exactly-parenthesized call as an explicit unwrap and never flags it, regardless of the callee's
+shape.
 
 **Known limitations:**
 
