@@ -520,8 +520,8 @@ function computeBodyShape(tokens, start, end) {
 }
 
 // Strips an optional single scope-qualifier prefix (script:/global:/local:/private:/etc.) and
-// lowercases, mirroring the convention already established elsewhere in this codebase
-// (src/packs/powershell.js stripScopePrefix) for comparing function/command names.
+// lowercases, mirroring the convention already established elsewhere in this codebase for
+// comparing function/command names.
 function stripScope(name) {
   const match = String(name || "").match(/^[A-Za-z_][A-Za-z0-9_]*:(.*)$/);
   return (match ? match[1] : String(name || "")).toLowerCase();
