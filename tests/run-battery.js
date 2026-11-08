@@ -60,7 +60,7 @@ console.log("Running Fail Battery...");
         // R16 removed: rule deleted by design (does not catch a real failure mode).
         // R21, R24, R28 promoted to ERROR (severity change only; still fire).
         const expectedRules = [
-            'R07', 'R12', 'R13', 'R18', 'R21', 'R24', 'R25', 'R26', 'R28',
+            'R07', 'R12', 'R13', 'R18', 'R21', 'R24', 'R26', 'R28',
             'extractor-json-error', 'odata-bind-guid', 'optionset-coverage', 'system-entity-cascade'
         ];
 
@@ -172,10 +172,10 @@ const probes = [
     {
         file: path.join(__dirname, 'probe-r25-other-vars.ps1'),
         label: 'probe-r25-other-vars',
-        // $client, $session, $config are not in default set; only $headers fires R25.
-        mustFire: ['R25'],
-        mustNotFire: [],
-        expectClean: false
+        // R25 is disabled (noise): it must not fire even for $headers.
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
     },
     {
         file: path.join(__dirname, 'probe-system-entity-incomplete.ps1'),
@@ -218,11 +218,11 @@ const probes = [
     {
         file: path.join(__dirname, 'probe-r25-default-set.ps1'),
         label: 'probe-r25-default-set',
-        // All six default variables assigned at script scope. R25 must fire SIX times.
-        mustFire: ['R25'],
-        mustNotFire: [],
-        expectClean: false,
-        exactFireCount: { 'R25': 6 }
+        // R25 is disabled (noise): six default variables assigned at script
+        // scope no longer fire it.
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
     },
     {
         file: path.join(__dirname, 'probe-r25-non-default.ps1'),
@@ -757,11 +757,10 @@ const probes = [
         file: path.join(__dirname, 'probe-R25-script-scope-body.ps1'),
         label: 'probe-R25-script-scope-body',
         // True positive: $body = ... at script scope (inside an `if` block, but
-        // `if` is not a function declaration). R25 MUST fire.
-        mustFire: ['R25'],
-        mustNotFire: [],
-        expectClean: false,
-        exactFireCount: { 'R25': 1 }
+        // `if` is not a function declaration). R25 is disabled: MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
     },
     {
         file: path.join(__dirname, 'probe-R25-function-local-body.ps1'),
@@ -808,11 +807,10 @@ const probes = [
         // a probe FAILURE, forcing an explicit policy decision (per gate
         // protocol in feedback_dataverse_linter_gate.md). See README "Known
         // limitations" section and the R25 section header above for the
-        // documented contract.
-        mustFire: ['R25'],
-        mustNotFire: [],
-        expectClean: false,
-        exactFireCount: { 'R25': 1 }
+        // documented contract. R25 is now disabled, so it MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R25'],
+        expectClean: true
     },
 
     // =========================================================================
@@ -881,12 +879,11 @@ const probes = [
         label: 'probe-R28-get-only-no-guard',
         // Read-only path: -Method Get is not a mutation. requires_present
         // does not match, R28 does not apply. R28 MUST NOT fire.
-        // Probe also assigns to `$response` at script scope, which fires R25
-        // (an unrelated, expected violation). Hence expectClean: false but
-        // R28 specifically must not fire.
+        // Probe assigns to `$response` at script scope; R25 is disabled, so the
+        // probe is now clean.
         mustFire: [],
         mustNotFire: ['R28'],
-        expectClean: false
+        expectClean: true
     },
     {
         file: path.join(__dirname, 'probe-R28-patch-no-guard.ps1'),
@@ -1676,8 +1673,51 @@ const probes = [
         // strippedContent does NOT strip string content (consistent with R33, R34).
         // R45 fires on the string literal. This probe anchors the known limitation
         // so any future string-stripping change causes a battery signal.
-        // EXPECTED: R45 fires (false positive accepted; no runtime consequence).
+        // R45 now evaluates against noCommentNoStringContent: a keyword inside a
+        // string literal no longer fires. R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-herestring-no-fire.ps1'),
+        label: 'probe-R45-herestring-no-fire',
+        // Keyword-in-parens inside a here-string. R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-foreach-object-no-fire.ps1'),
+        label: 'probe-R45-foreach-object-no-fire',
+        // (foreach-object ...) is a cmdlet name, not the foreach keyword. The
+        // (?![\w.-]) tail stops the keyword match at the hyphen. R45 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R45'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R45-bare-if-grouping-fire.ps1'),
+        label: 'probe-R45-bare-if-grouping-fire',
+        // Bare ( if ($a) {1} ) in code. R45 MUST fire.
         mustFire: ['R45'],
+        mustNotFire: [],
+        expectClean: false
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-ado-rest-no-fire.ps1'),
+        label: 'probe-R28-ado-rest-no-fire',
+        // ADO (non-Dataverse) REST POST without guard. No /api/data/ in the
+        // script, so R28 does not apply. R28 MUST NOT fire.
+        mustFire: [],
+        mustNotFire: ['R28'],
+        expectClean: true
+    },
+    {
+        file: path.join(__dirname, 'probe-R28-dataverse-url-post-fire.ps1'),
+        label: 'probe-R28-dataverse-url-post-fire',
+        // /api/data/v9.2/ POST without guard. R28 MUST fire.
+        mustFire: ['R28'],
         mustNotFire: [],
         expectClean: false
     },

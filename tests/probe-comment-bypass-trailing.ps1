@@ -18,5 +18,5 @@ $x = 1  # Start-Transcript    if ($null -eq $foo)
 $msg = "remember to call Start-Transcript and check if (`$null -eq `$foo)"
 
 # Two unguarded POSTs that should fire R28 if the rule worked.
-Invoke-RestMethod -Method POST -Uri "https://api/entities"
-Invoke-RestMethod -Method POST -Uri "https://api/entities"
+Invoke-RestMethod -Method POST -Uri "https://org.crm.dynamics.com/api/data/v9.2/entities"
+Invoke-RestMethod -Method POST -Uri "https://org.crm.dynamics.com/api/data/v9.2/entities"

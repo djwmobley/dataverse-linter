@@ -7,5 +7,5 @@
 $optionSets = @("a", "b")
 
 # Two POSTs, both unguarded. Should fire R28.
-Invoke-RestMethod -Method POST -Uri "https://api/entities"
-Invoke-RestMethod -Method POST -Uri "https://api/entities"
+Invoke-RestMethod -Method POST -Uri "https://org.crm.dynamics.com/api/data/v9.2/entities"
+Invoke-RestMethod -Method POST -Uri "https://org.crm.dynamics.com/api/data/v9.2/entities"
