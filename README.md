@@ -232,6 +232,8 @@ A `pac solution import` that succeeds at the CLI level does not automatically pu
 
 ### R25 — Unprefixed assignment shadows `$script:` variable
 
+**Disabled (`"enabled": false`):** R25 produced mostly noise (about 120 flags in 14 days, almost all benign). The rule definition and its probes are kept; re-enable by flipping `enabled` in `rules/registry.json`.
+
 In PowerShell, a bare `$headers = ...` assignment at script scope is identical to `$script:headers = ...`. If a helper function later does `$headers = ...` as a local variable, it shadows the script-scope variable silently — subsequent code using `$script:headers` gets the wrong value, commonly manifesting as a 401 (auth dict wiped) on subsequent Web API calls. Use unique local names or explicit `$local:` / `$script:` prefixes to avoid the ambiguity.
 
 **v0.4.1 — scope-aware:** R25 now uses the `scope: "script-only"` rule field. Matches whose match index lies inside a `function NAME { ... }` declaration body are suppressed. PowerShell function bodies have their own variable scope; an assignment of the form `$body = ...` inside a function is function-local and CANNOT shadow `$script:body` (which is what R25 is designed to catch). The previous behavior fired on legitimate function-local assignments, forcing authors to either rename variables (acceptable) or pollute the watch-list with apologetic comments. Scope-awareness restores the rule to its stated intent: "Unprefixed assignment **at script scope** shadows `$script:`."
@@ -259,6 +261,8 @@ Implementation: `extractor.computeFunctionBodyRanges(rawContent)` walks the file
 ### R28 — Missing idempotency guard
 
 Web API POST calls to create Dataverse records fail on re-run if the record already exists (duplicate detection or unique constraint violations). A script that runs `Invoke-RestMethod -Method POST` without first checking whether the target entity exists (`if ($null -eq $existing)`) is not safe to re-run. Every ALM script should guard POST calls with an existence check. **Known limitation:** R28 is a `regex-inverse` rule that checks for the presence of `if ($null -eq` anywhere in the script. It does not verify that the guard actually wraps the POST call — a script with a guard that is unrelated to the POST calls would satisfy the rule.
+
+**Dataverse-only scoping:** `requires_present` is now an array and ALL entries must match: the mutating REST call regex AND the literal `/api/data/`. R28 therefore applies only to scripts that contain a Dataverse Web API URL; other REST scripts (for example Azure DevOps) are skipped. Accepted gap: `/api/data/` inside a block comment still counts, and a script whose Dataverse URL is built only from a variable without the literal `/api/data/` is skipped.
 
 **v0.4.2 — conjunction-aware via `requires_present`:** R28 now applies only when the file actually contains a Dataverse Web API mutation call. The `requires_present` regex matches `Invoke-RestMethod` or `Invoke-WebRequest` with `-Method` set to one of `POST`, `PATCH`, or `PUT` (case variants of each). If no mutation call is present, R28 is skipped entirely — the rule does not apply.
 
@@ -575,6 +579,8 @@ Sources: https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-q
 ---
 
 ### R45 -- Statement keyword inside grouping operator `(...)` (v0.7.0, content-view fix v0.7.2)
+
+**Scoping update:** R45 now evaluates against `noCommentNoStringContent`, so keyword text inside strings, here-strings, and comments no longer fires, and the keyword must end at a non-word, non-`.`, non-`-` character (`(foreach-object ...)` is a cmdlet, not the keyword). Accepted gap: the reported line number may be approximate because string bodies are blanked before matching. This supersedes the "string-literal false positive" notes below.
 
 R45 fires when a PowerShell statement keyword (`if`, `foreach`, `for`, `while`, `switch`, `do`, `trap`) appears immediately inside the **grouping operator** `( )` -- i.e., when the pattern `(keyword` (with optional whitespace) is not preceded by `$` (subexpression operator) or `@` (array subexpression operator).
 

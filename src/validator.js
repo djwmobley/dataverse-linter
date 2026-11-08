@@ -139,9 +139,13 @@ function validate(extraction) {
         // to a normalized-rawContentNoBlockComments hybrid then.
         let requiresPresentSatisfied = true;
         if (rule.requires_present) {
-            const presentRe = new RegExp(rule.requires_present, "m");
-            if (!presentRe.test(normalizedContent)) {
-                requiresPresentSatisfied = false;
+            // String or array of strings; with an array, ALL entries must match.
+            const presentList = Array.isArray(rule.requires_present) ? rule.requires_present : [rule.requires_present];
+            for (const src of presentList) {
+                if (!new RegExp(src, "m").test(normalizedContent)) {
+                    requiresPresentSatisfied = false;
+                    break;
+                }
             }
         }
 

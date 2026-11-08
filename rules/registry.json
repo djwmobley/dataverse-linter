@@ -24,7 +24,7 @@
     ],
     "scope": "script-only",
     "message": "Unprefixed assignment at script scope shadows $script:. Use a different name.",
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "R07",
@@ -87,7 +87,10 @@
     "severity": "ERROR",
     "type": "regex-inverse",
     "pattern": "if\\s*\\(\\$null\\s*-eq",
-    "requires_present": "(?:Invoke-RestMethod|Invoke-WebRequest)[^\\n]*-Method\\s+[\"']?(?:POST|Post|post|PATCH|Patch|patch|PUT|Put|put)[\"']?",
+    "requires_present": [
+      "(?:Invoke-RestMethod|Invoke-WebRequest)[^\\n]*-Method\\s+[\"']?(?:POST|Post|post|PATCH|Patch|patch|PUT|Put|put)[\"']?",
+      "/api/data/"
+    ],
     "message": "Script lacks standard idempotency guards (e.g., if ($null -eq $existing)). Ensure Web API POSTs are guarded. Re-runs without a guard will create duplicate records in Dataverse.",
     "enabled": true
   },
@@ -240,7 +243,7 @@
     "title": "Statement keyword inside grouping operator -- use subexpression operator $(...) instead",
     "severity": "ERROR",
     "type": "regex",
-    "pattern": "(?<![\\$@\\w])(\\()\\s*(if|foreach|for|while|switch|do|trap)\\b",
+    "pattern": "(?<![\\$@\\w])(\\()\\s*(if|foreach|for|while|switch|do|trap)(?![\\w.-])",
     "description": "The grouping operator ( ) treats its content as a command or expression, not a statement list. PowerShell statement keywords (if, foreach, for, while, switch, do, trap) placed immediately inside ( ) are parsed as command names -- the runtime raises 'The term \"<kw>\" is not recognized as a name of a cmdlet, function, script file, or executable program.' The parser does NOT catch this at parse time: [System.Management.Automation.Language.Parser]::ParseInput returns 0 errors, so AST-based parse checks are blind to this class of defect. The fix is the subexpression operator $( ) which is explicitly designed to hold one or more statements and return their output. Per about_Operators: grouping operator ( ) 'allows you to let output from a command participate in an expression'; subexpression operator $( ) 'returns the result of one or more statements'. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
     "remediation": "Replace the outer ( ) with $( ): change -Param (if (...) { ... } else { ... }) to -Param $(if (...) { ... } else { ... }). The array subexpression @( ) is also valid. Do not change normal statement usage 'if ($x) { ... }' -- that has the keyword BEFORE the paren, not after.",
     "references": [
@@ -248,7 +251,7 @@
       "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_if"
     ],
     "message": "Statement keyword inside grouping operator '(...)' is parsed as a command and fails at runtime with 'The term is not recognized as a cmdlet'. The grouping operator ( ) holds expressions and commands only. Per about_Operators, $( ) is the subexpression operator that 'returns the result of one or more statements'. Use the subexpression operator $(...) instead. See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_operators",
-    "content_view": "strippedNoBlockComments",
+    "content_view": "noCommentNoStringContent",
     "enabled": true
   },
   {
